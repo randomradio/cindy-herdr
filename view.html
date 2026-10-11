@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="view.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="filters">
+        <label class="field">
+          <span class="field-label">Machine</span>
+          <select id="machine" aria-label="Machine"></select>
+        </label>
+        <label class="field">
+          <span class="field-label">Session</span>
+          <select id="session" aria-label="Session"></select>
+        </label>
+        <button id="refresh" class="icon-btn" type="button" aria-label="Refresh" title="Refresh">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.61-3.89M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+      <nav id="list" class="list scroll" aria-label="herdr panes"></nav>
+    </aside>
+
+    <main class="chat">
+      <div id="placeholder" class="placeholder">
+        <p class="placeholder-title">Select a session</p>
+        <p class="placeholder-body">Pick an agent or shell on the left to follow its conversation and send it messages.</p>
+      </div>
+
+      <section id="conversation" class="conversation" hidden>
+        <header class="chat-head">
+          <span id="head-dot" class="dot"></span>
+          <div class="head-main">
+            <div id="head-title" class="head-title"></div>
+            <div id="head-meta" class="head-meta"></div>
+          </div>
+          <span id="head-status" class="badge"></span>
+        </header>
+
+        <div class="output-wrap">
+          <pre id="output" class="output scroll" tabindex="0" aria-label="Terminal output"></pre>
+          <button id="jump" class="jump" type="button" hidden>Jump to latest</button>
+        </div>
+
+        <footer class="composer">
+          <div class="keys" role="group" aria-label="Quick keys">
+            <button class="key" type="button" data-key="enter">Enter</button>
+            <button class="key" type="button" data-key="esc">Esc</button>
+            <button class="key" type="button" data-key="ctrl+c">Ctrl+C</button>
+            <button class="key" type="button" data-key="up" aria-label="Up arrow">↑</button>
+            <button class="key" type="button" data-key="down" aria-label="Down arrow">↓</button>
+            <button class="key" type="button" data-key="tab">Tab</button>
+            <span id="send-note" class="send-note" role="status" aria-live="polite"></span>
+          </div>
+          <div class="input-box">
+            <textarea id="input" rows="1" placeholder="Message the agent" aria-label="Message"></textarea>
+            <button id="send" class="send-btn" type="button" aria-label="Send" title="Send (Enter)" disabled>
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </footer>
+      </section>
+    </main>
+  </div>
+  <script src="view.js"></script>
+</body>
+</html>

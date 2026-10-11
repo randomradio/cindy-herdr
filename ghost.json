@@ -1,0 +1,547 @@
+{
+  "schemaVersion": 3,
+  "minCindyVersion": "0.1.97",
+  "id": "herdr",
+  "name": "herdr",
+  "description": "Manage herdr terminal sessions, workspaces, panes and coding agents on this computer and on SSH machines saved in herdr. Includes a live side panel of agent states.",
+  "whenToUse": "The user mentions herdr, herdr sessions/workspaces/tabs/panes, or wants to check, read, prompt, start, wait on or coordinate coding agents (Claude, Codex, Grok, Pi, etc.) running in herdr, locally or on a remote herdr machine (e.g. a dev box reachable over SSH).",
+  "version": "1.0.0",
+  "entry": "main.js",
+  "icon": "assets/icon.png",
+  "command": "herdr",
+  "confirm": true,
+  "mainView": {
+    "title": "herdr",
+    "icon": "code",
+    "html": "view.html"
+  },
+  "node": {
+    "entry": "node/worker.cjs",
+    "protocol": "json-rpc-stdio",
+    "lifecycle": "on-demand",
+    "idleTimeoutSeconds": 300
+  },
+  "tools": [
+    {
+      "name": "herdr_machines",
+      "description": "List where herdr can be reached: \"local\" (this computer) plus every SSH machine saved with `herdr machine add`, with its default remote session. Use the label as the `machine` argument of other herdr tools.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "herdr_sessions",
+      "description": "List named herdr sessions (persistent servers) on a machine and whether each is running.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "description": "\"local\" (default) or a saved herdr machine label such as \"devbox\"."
+          }
+        }
+      }
+    },
+    {
+      "name": "herdr_overview",
+      "description": "Snapshot one herdr session: workspaces, tabs, panes (cwd, title) and recognized agents with their state (idle / working / blocked / done / unknown). Start here to discover ids. IDs are opaque and scoped to one machine+session; never reuse them across machines.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "description": "\"local\" (default) or a saved herdr machine label. Remote machines default to their saved session."
+          },
+          "session": {
+            "type": "string",
+            "description": "Named herdr session, e.g. \"agents\". Omit for the default session (or the saved session of a remote machine)."
+          }
+        }
+      }
+    },
+    {
+      "name": "herdr_agent_get",
+      "description": "Show one agent's details and lifecycle state.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "description": "\"local\" (default) or a saved herdr machine label."
+          },
+          "session": {
+            "type": "string",
+            "description": "Named herdr session; omit for default."
+          },
+          "target": {
+            "type": "string",
+            "description": "Live agent name or the pane id hosting it (e.g. \"w9:p1\")."
+          }
+        },
+        "required": [
+          "target"
+        ]
+      }
+    },
+    {
+      "name": "herdr_read",
+      "description": "Read recent terminal output from a pane or agent (ANSI stripped). Use before deciding what to send, and after a wait returns blocked.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "description": "\"local\" (default) or a saved herdr machine label."
+          },
+          "session": {
+            "type": "string",
+            "description": "Named herdr session; omit for default."
+          },
+          "target": {
+            "type": "string",
+            "description": "Pane id (\"w1:p2\") or live agent name."
+          },
+          "lines": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000,
+            "description": "Lines to read (default 120)."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "visible",
+              "recent",
+              "recent-unwrapped",
+              "detection"
+            ],
+            "description": "Snapshot source; default recent-unwrapped (best for logs/transcripts)."
+          }
+        },
+        "required": [
+          "target"
+        ]
+      }
+    },
+    {
+      "name": "herdr_prompt_agent",
+      "description": "Submit a prompt to a coding agent running in herdr and, by default, wait until it settles (idle/done/blocked). Returns the final state; then use herdr_read to get its answer. Rejected with AGENT_BLOCKED if the agent is waiting on an approval/question: read it and ask the user before answering. A timeout does not prove the prompt was not delivered; do not resend blindly.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "description": "\"local\" (default) or a saved herdr machine label."
+          },
+          "session": {
+            "type": "string",
+            "description": "Named herdr session; omit for default."
+          },
+          "target": {
+            "type": "string",
+            "description": "Live agent name or pane id hosting the agent."
+          },
+          "text": {
+            "type": "string",
+            "description": "Prompt text, passed through as the user wrote it. Cannot start with \"-\"."
+          },
+          "wait": {
+            "type": "boolean",
+            "description": "Wait for the agent to settle (default true)."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 600000,
+            "description": "Wait limit in ms (default 110000)."
+          }
+        },
+        "required": [
+          "target",
+          "text"
+        ]
+      }
+    },
+    {
+      "name": "herdr_wait_agent",
+      "description": "Wait until an agent reaches a state. Without `until`, waits for idle, done or blocked.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "description": "\"local\" (default) or a saved herdr machine label."
+          },
+          "session": {
+            "type": "string",
+            "description": "Named herdr session; omit for default."
+          },
+          "target": {
+            "type": "string",
+            "description": "Live agent name or pane id."
+          },
+          "until": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "idle",
+                "working",
+                "blocked",
+                "done",
+                "unknown"
+              ]
+            },
+            "description": "Optional states to wait for."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 600000,
+            "description": "Wait limit in ms (default 110000)."
+          }
+        },
+        "required": [
+          "target"
+        ]
+      }
+    },
+    {
+      "name": "herdr_send_keys",
+      "description": "Send logical key presses (e.g. esc, enter, ctrl+c, up) to an agent or pane. Only answer an agent's approval/question UI when the user told you what to choose.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "description": "\"local\" (default) or a saved herdr machine label."
+          },
+          "session": {
+            "type": "string",
+            "description": "Named herdr session; omit for default."
+          },
+          "target": {
+            "type": "string",
+            "description": "Agent name, or pane id (contains \":\") for raw pane keys."
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "maxItems": 32,
+            "description": "Key names in order, e.g. [\"esc\"] or [\"ctrl+c\"]."
+          }
+        },
+        "required": [
+          "target",
+          "keys"
+        ]
+      }
+    },
+    {
+      "name": "herdr_run_command",
+      "description": "Run a shell command in an existing pane (text + Enter). Optionally wait for a literal substring to appear in its output. The pane should be at a shell prompt, not running an agent.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "description": "\"local\" (default) or a saved herdr machine label."
+          },
+          "session": {
+            "type": "string",
+            "description": "Named herdr session; omit for default."
+          },
+          "pane_id": {
+            "type": "string",
+            "description": "Pane id such as \"w1:p2\"."
+          },
+          "command": {
+            "type": "string",
+            "description": "Shell command line to run."
+          },
+          "wait_for": {
+            "type": "string",
+            "description": "Optional literal text to wait for in the output."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 600000,
+            "description": "Wait limit when wait_for is set (default 60000)."
+          }
+        },
+        "required": [
+          "pane_id",
+          "command"
+        ]
+      }
+    },
+    {
+      "name": "herdr_send_text",
+      "description": "Type literal text into a pane without pressing Enter.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "description": "\"local\" (default) or a saved herdr machine label."
+          },
+          "session": {
+            "type": "string",
+            "description": "Named herdr session; omit for default."
+          },
+          "pane_id": {
+            "type": "string",
+            "description": "Pane id."
+          },
+          "text": {
+            "type": "string",
+            "description": "Text to type. Cannot start with \"-\"."
+          }
+        },
+        "required": [
+          "pane_id",
+          "text"
+        ]
+      }
+    },
+    {
+      "name": "herdr_wait_output",
+      "description": "Wait until a pane's recent output contains a literal substring or matches a Rust regex. Existing output can match immediately.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "description": "\"local\" (default) or a saved herdr machine label."
+          },
+          "session": {
+            "type": "string",
+            "description": "Named herdr session; omit for default."
+          },
+          "pane_id": {
+            "type": "string",
+            "description": "Pane id."
+          },
+          "match": {
+            "type": "string",
+            "description": "Literal substring to wait for."
+          },
+          "regex": {
+            "type": "string",
+            "description": "Rust regex to wait for (used instead of match)."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 600000,
+            "description": "Wait limit (default 60000)."
+          }
+        },
+        "required": [
+          "pane_id"
+        ]
+      }
+    },
+    {
+      "name": "herdr_split_pane",
+      "description": "Split an existing pane to create a new shell pane next to it, without stealing the user's focus. Returns the new pane id in result.pane.pane_id. Split wide panes right, narrow/tall panes down.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "description": "\"local\" (default) or a saved herdr machine label."
+          },
+          "session": {
+            "type": "string",
+            "description": "Named herdr session; omit for default."
+          },
+          "pane_id": {
+            "type": "string",
+            "description": "Pane to split."
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "right",
+              "down"
+            ],
+            "description": "Default right."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Optional absolute working directory on that machine; defaults to herdr's choice."
+          },
+          "focus": {
+            "type": "boolean",
+            "description": "Move focus to the new pane. Only true if the user asked."
+          }
+        },
+        "required": [
+          "pane_id"
+        ]
+      }
+    },
+    {
+      "name": "herdr_start_agent",
+      "description": "Start a supported coding agent (claude, codex, grok, pi, cursor, gemini, opencode, ...) in an existing pane that is at a shell prompt. Usually split a pane first. Returns once the agent is ready; then use herdr_prompt_agent.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "description": "\"local\" (default) or a saved herdr machine label."
+          },
+          "session": {
+            "type": "string",
+            "description": "Named herdr session; omit for default."
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique agent name: lowercase, starts with a letter, up to 32 chars, e.g. \"reviewer\"."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Agent kind requested by the user, e.g. claude, codex, grok, pi, cursor, gemini, opencode, copilot, amp."
+          },
+          "pane_id": {
+            "type": "string",
+            "description": "Existing pane at an interactive shell prompt."
+          },
+          "agent_args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional native CLI args for the agent."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 300000,
+            "description": "Startup wait (default 30000)."
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "pane_id"
+        ]
+      }
+    },
+    {
+      "name": "herdr_create",
+      "description": "Create a new herdr workspace, or a new tab in an existing workspace, only when the user asked for one. Returns the new ids including the root pane id. Does not take the user's focus unless focus is true.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "description": "\"local\" (default) or a saved herdr machine label."
+          },
+          "session": {
+            "type": "string",
+            "description": "Named herdr session; omit for default."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "workspace",
+              "tab"
+            ]
+          },
+          "workspace_id": {
+            "type": "string",
+            "description": "Required when kind is tab."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Optional absolute working directory on that machine."
+          },
+          "label": {
+            "type": "string",
+            "description": "Optional label."
+          },
+          "focus": {
+            "type": "boolean",
+            "description": "Switch the user's view to it. Default false."
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      }
+    },
+    {
+      "name": "herdr_focus",
+      "description": "Switch the herdr UI focus to a workspace, tab or agent. Only when the user asked to switch.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "description": "\"local\" (default) or a saved herdr machine label."
+          },
+          "session": {
+            "type": "string",
+            "description": "Named herdr session; omit for default."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "workspace",
+              "tab",
+              "agent"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "description": "Workspace id, tab id, or agent name / pane id."
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ]
+      }
+    },
+    {
+      "name": "herdr_close",
+      "description": "Close a pane, tab or workspace, stopping the processes in it. Only call when the user explicitly asked to close that specific item. The user must also approve a confirmation dialog; if they decline (USER_DECLINED), do not retry.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "description": "\"local\" (default) or a saved herdr machine label."
+          },
+          "session": {
+            "type": "string",
+            "description": "Named herdr session; omit for default."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "pane",
+              "tab",
+              "workspace"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "description": "Pane, tab or workspace id."
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ]
+      }
+    }
+  ]
+}
