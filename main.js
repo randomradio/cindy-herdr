@@ -22,8 +22,10 @@ const TOOL_METHODS = {
 
 // Methods allowed from the herdr page (user clicks; no Agent call in flight).
 const PANEL_METHODS = new Set([
-  'machines/list', 'sessions/list', 'overview', 'read', 'agents/get', 'agents/prompt', 'keys',
+  'machines/list', 'sessions/list', 'overview', 'read', 'agents/get', 'keys',
   'workspaces/launch', 'workspaces/rename', 'focus', 'close',
+  // Live terminal: the page mirrors one pane in xterm and types into it.
+  'term/screen', 'term/input', 'chat/history', 'chat/prompt',
 ]);
 
 // Long-running methods: keep the tool call alive while the worker waits.
@@ -32,6 +34,7 @@ const LONG_METHODS = new Set([
 ]);
 
 function nodeTimeouts(method, args) {
+  if (method === 'term/screen' || method === 'term/input') return { timeoutMs: 15000 };
   if (!LONG_METHODS.has(method)) return { timeoutMs: 60000 };
   const waitMs = Number(args && args.timeout_ms) || 110000;
   // Launch = create (a worktree can take up to 90s) + agent startup wait.
@@ -144,26 +147,25 @@ cindy.onHostMessage(async function (msg) {
 
 // ---------- panel bridge ----------
 const panelChannel = new BroadcastChannel('herdr-panel');
-const seen = new Map(); // reqId -> response (dedupe panel retries)
+const pendingPanel = new Set();
+const completedPanel = new Map();
 
 panelChannel.onmessage = async function (event) {
   const data = event.data || {};
   if (data.type !== 'request' || !data.reqId) return;
-  if (seen.has(data.reqId)) {
-    const cached = seen.get(data.reqId);
-    if (cached) panelChannel.postMessage(cached);
+  if (pendingPanel.has(data.reqId)) return;
+  const cached = completedPanel.get(data.reqId);
+  if (cached) {
+    panelChannel.postMessage(cached);
     return;
   }
-  seen.set(data.reqId, null);
-  if (seen.size > 200) seen.delete(seen.keys().next().value);
+  pendingPanel.add(data.reqId);
   let out;
   if (!PANEL_METHODS.has(data.method)) {
     out = { type: 'response', reqId: data.reqId, ok: false, message: 'Not allowed from the panel.' };
   } else {
     try {
       const params = { ...(data.params || {}) };
-      // The page polls output itself; never block on agent completion or pane output here.
-      if (data.method === 'agents/prompt') params.wait = false;
       // The page confirms close/remove in-page; it never forces a worktree removal.
       if (data.method === 'close') delete params.force;
       const r = await callWorker(data.method, params, null);
@@ -174,6 +176,8 @@ panelChannel.onmessage = async function (event) {
       out = { type: 'response', reqId: data.reqId, ok: false, message: String((err && err.message) || err) };
     }
   }
-  seen.set(data.reqId, out);
+  pendingPanel.delete(data.reqId);
+  completedPanel.set(data.reqId, out);
+  while (completedPanel.size > 200) completedPanel.delete(completedPanel.keys().next().value);
   panelChannel.postMessage(out);
 };

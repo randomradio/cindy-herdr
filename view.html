@@ -3,7 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="vendor/xterm/xterm.css" />
   <link rel="stylesheet" href="view.css" />
+  <link rel="stylesheet" href="chat-style.css" />
 </head>
 <body>
   <div class="layout">
@@ -34,7 +36,7 @@
     <main class="chat">
       <div id="placeholder" class="placeholder">
         <p class="placeholder-title">Select an agent</p>
-        <p class="placeholder-body">Pick an agent on the left to follow it and send it messages, or start a new one.</p>
+        <p class="placeholder-body">Pick an agent on the left to read its conversation or open its terminal, or start a new one.</p>
       </div>
 
       <!-- New agent form -->
@@ -99,37 +101,51 @@
             <div id="head-meta" class="head-meta"></div>
           </div>
           <span id="head-status" class="badge"></span>
+          <div class="view-switch" role="group" aria-label="Agent view">
+            <button id="show-chat" type="button" aria-pressed="false">Chat</button>
+            <button id="show-terminal" type="button" aria-pressed="true">Terminal</button>
+          </div>
         </header>
 
-        <div class="output-wrap">
-          <pre id="output" class="output scroll" tabindex="0" aria-label="Agent output"></pre>
-          <button id="jump" class="jump" type="button" hidden>Jump to latest</button>
-        </div>
-
-        <footer class="composer">
-          <div id="blocked" class="blocked-banner" role="alert" hidden>
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 15 14H1z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 6.2v3.6M8 11.6v.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-            <div>
-              <strong>Needs an answer.</strong>
-              <span>The agent is waiting on a question or approval shown above. Choose with ↑ / ↓ and Enter, or type a reply; it is sent as keystrokes followed by Enter.</span>
+        <div id="chat-panel" class="chat-panel" hidden>
+          <div id="chat-state" class="chat-state" role="status" aria-live="polite" hidden>
+            <strong id="chat-state-title"></strong>
+            <p id="chat-state-reason"></p>
+            <div class="chat-state-actions">
+              <button id="chat-retry" type="button" class="btn">Retry</button>
+              <button id="chat-open-terminal" type="button" class="btn">Open Terminal</button>
             </div>
           </div>
-          <div class="keys" role="group" aria-label="Quick keys">
-            <button class="key" type="button" data-key="enter">Enter</button>
-            <button class="key" type="button" data-key="esc">Esc</button>
-            <button class="key" type="button" data-key="up" aria-label="Up arrow">↑</button>
-            <button class="key" type="button" data-key="down" aria-label="Down arrow">↓</button>
-            <button class="key" type="button" data-key="tab">Tab</button>
-            <button class="key" type="button" data-key="ctrl+c">Ctrl+C</button>
-            <span id="send-note" class="send-note" role="status" aria-live="polite"></span>
+          <div id="chat-list" class="chat-list scroll" role="log" aria-label="Agent conversation">
+            <button id="chat-older" type="button" class="chat-older" hidden>Load older messages</button>
+            <button id="chat-newer" type="button" class="chat-older" hidden>Jump to latest messages</button>
+            <div id="chat-events"></div>
           </div>
-          <div class="input-box">
-            <textarea id="input" rows="1" placeholder="Message the agent" aria-label="Message"></textarea>
-            <button id="send" class="send-btn" type="button" aria-label="Send" title="Send (Enter)" disabled>
-              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </button>
+          <form id="chat-form" class="chat-form">
+            <textarea id="chat-input" rows="2" aria-label="Message the agent" placeholder="Message the agent · Enter to send, Shift+Enter for a new line"></textarea>
+            <button id="chat-send" type="submit" aria-label="Send message">Send</button>
+          </form>
+          <div id="chat-note" role="status" aria-live="polite" class="chat-note"></div>
+        </div>
+
+        <div id="terminal-panel" class="terminal-panel">
+        <div id="blocked" class="blocked-banner" role="alert" hidden>
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 15 14H1z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 6.2v3.6M8 11.6v.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <div>
+            <strong>Needs an answer.</strong>
+            <span>The agent is waiting on a question or approval in the terminal below. Click the terminal and answer with ↑ / ↓ and Enter.</span>
           </div>
+        </div>
+
+        <div id="term-wrap" class="term-wrap scroll">
+          <div id="term" class="term" aria-label="Agent terminal"></div>
+        </div>
+
+        <footer class="term-foot">
+          <span id="term-hint" class="term-hint">Click to type. Keys go to the herdr pane; the cursor position isn't mirrored.</span>
+          <span id="term-note" class="term-note" role="status" aria-live="polite"></span>
         </footer>
+        </div>
       </section>
     </main>
   </div>
@@ -157,6 +173,8 @@
     </form>
   </div>
 
+  <script src="vendor/xterm/xterm.js"></script>
+  <script src="chat-view.js"></script>
   <script src="view.js"></script>
 </body>
 </html>

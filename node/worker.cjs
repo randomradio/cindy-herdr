@@ -9,6 +9,16 @@ const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const transcripts = require('./transcript.cjs');
+const { assertRemotePromptBody } = require('./prompt-guard.cjs');
+// The plugin is installed locally, so send a bundled one-shot helper to Node
+// on the saved SSH machine. The remote machine needs Node but no installed files.
+const REMOTE_HISTORY_SCRIPT = (() => {
+  const library = fs.readFileSync(path.join(__dirname, 'transcript.cjs'), 'utf8');
+  const helper = fs.readFileSync(path.join(__dirname, 'remote-history.cjs'), 'utf8')
+    .replace("const transcripts = require('./transcript.cjs');", '');
+  return `globalThis.__HERDR_REMOTE_HELPER__ = true;\nconst transcripts = (() => { const module = { exports: {} }; (function(module, require) { ${library}\n })(module, require); return module.exports; })();\n${helper}`;
+})();
 
 const MAX_OUTPUT = 4 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -198,24 +208,28 @@ function remoteArg(a) {
   return shQuote(a);
 }
 
-function runSsh(target, args, timeoutMs) {
+function runSshCommand(target, remoteCmd, timeoutMs) {
   const ssh = findBinary('ssh');
   if (!ssh) return Promise.reject(new UserError('SSH_NOT_FOUND', 'ssh is not available on this computer.'));
-  const remoteCmd = REMOTE_PATH_PREFIX + ['herdr', ...args].map(remoteArg).join(' ');
   const sshArgs = ['-n', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15'];
   const controlDir = sshControlDir();
   if (controlDir) {
-    // Reuse one connection for repeated panel refreshes / tool calls.
-    sshArgs.push('-o', 'ControlMaster=auto', '-o', `ControlPath=${controlDir}/%C`, '-o', 'ControlPersist=120');
+    // Reuse one connection for repeated page refreshes / tool calls, and keep it
+    // warm long enough that reopening the herdr page skips the SSH handshake.
+    sshArgs.push('-o', 'ControlMaster=auto', '-o', `ControlPath=${controlDir}/%C`, '-o', 'ControlPersist=600');
   }
   sshArgs.push('-T', target, remoteCmd);
   return execCapture(ssh, sshArgs, timeoutMs).then((res) => {
     if (res.code === 255 && !res.stdout) {
       throw new UserError('SSH_FAILED', `SSH to ${target} failed: ${res.stderr.trim().slice(0, 500) || 'exit 255'}. Check that passwordless SSH works (BatchMode).`);
     }
-    if (res.code === 127) {
-      throw new UserError('HERDR_NOT_FOUND', `herdr was not found on ${target}.`);
-    }
+    return res;
+  });
+}
+function runSsh(target, args, timeoutMs) {
+  const remoteCmd = REMOTE_PATH_PREFIX + ['herdr', ...args].map(remoteArg).join(' ');
+  return runSshCommand(target, remoteCmd, timeoutMs).then((res) => {
+    if (res.code === 127) throw new UserError('HERDR_NOT_FOUND', `herdr was not found on ${target}.`);
     return res;
   });
 }
@@ -326,6 +340,31 @@ function waitTimeout(params, fallback) {
   return t === undefined ? fallback : t;
 }
 
+async function resolveChatFile(p, target) {
+  const snap = await herdr(p, ['api', 'snapshot']);
+  const panes = snap.result?.snapshot?.panes || [];
+  const pane = panes.find((a) => a.pane_id === target && a.agent);
+  if (!pane) return { available: false, reason: 'The agent is no longer in this pane.' };
+  if (!transcripts.supported.includes(pane.agent)) {
+    return { available: false, reason: `Chat history for ${pane.agent} is not supported yet. Open Terminal to interact with this agent.` };
+  }
+  let file = transcripts.resolve(pane.agent_session, pane.agent);
+  if (!file && (pane.agent === 'codex' || pane.agent === 'omp')) {
+    const info = await herdr(p, ['pane', 'process-info', '--pane', target]);
+    const processes = info.result?.process_info?.foreground_processes || [];
+    const candidates = processes.filter((proc) => proc.name === pane.agent && proc.cwd === pane.foreground_cwd && Number.isSafeInteger(proc.pid));
+    if (candidates.length === 1) file = pane.agent === 'codex'
+      ? transcripts.resolveCodexProcess(candidates[0].pid, candidates[0].cwd)
+      : transcripts.resolveOmpProcess(candidates[0].pid, candidates[0].cwd);
+  }
+  if (!file) return { available: false, reason: 'herdr has not reported an exact transcript for this agent.' };
+  return { available: true, pane, file };
+}
+
+function parseRemoteHelperStdout(stdout) {
+  try { return JSON.parse(stdout); }
+  catch { throw new UserError('HERDR_FAILED', 'Remote transcript response was not valid.'); }
+}
 const METHODS = {
   async 'machines/list'() {
     const list = await listMachines();
@@ -345,6 +384,9 @@ const METHODS = {
     // One round trip: the snapshot carries workspaces, tabs, panes and agents.
     const snap = await herdr(p, ['api', 'snapshot']);
     const s = (snap.result && snap.result.snapshot) || {};
+    // Pane size in cells, from the tab layouts (the xterm mirror uses it).
+    const rects = new Map();
+    for (const l of s.layouts || []) for (const pn of l.panes || []) rects.set(pn.pane_id, pn.rect);
     return {
       machine: snap.machine,
       session: snap.session,
@@ -367,7 +409,13 @@ const METHODS = {
         status: t.agent_status,
         pane_count: t.pane_count,
       })),
-      panes: (s.panes || []).map(slimPane),
+      panes: (s.panes || []).map((pn) => {
+        const out = slimPane(pn);
+        const rect = rects.get(pn.pane_id);
+        out.cols = rect ? rect.width : undefined;
+        out.rows = (pn.scroll && pn.scroll.viewport_rows) || (rect ? rect.height : undefined);
+        return out;
+      }),
       agents: (s.agents || []).map(slimAgent),
     };
   },
@@ -485,6 +533,109 @@ const METHODS = {
       return { ...r, waited: w.result };
     }
     return r;
+  },
+
+  // Page history: resolve the session through herdr on every request so a pane that
+  // restarted cannot continue displaying another session's transcript.
+  async 'chat/history'(p) {
+    const target = str(req(p, 'target'), ID_RE, 'target');
+    if (!target.includes(':')) throw new UserError('INVALID_ARGS', 'target must be a pane id.');
+    const machine = await resolveMachine(p.machine);
+    if (machine.kind === 'ssh') {
+      if (p.before !== undefined && (!Number.isSafeInteger(p.before) || p.before < 0) ||
+          p.after !== undefined && (!Number.isSafeInteger(p.after) || p.after < 0)) {
+        throw new UserError('INVALID_ARGS', 'Invalid transcript cursor.');
+      }
+      const session = p.session || machine.defaultSession || 'default';
+      str(session, SESSION_RE, 'session');
+      const payload = JSON.stringify({ action: 'history', target, session, identity: p.identity, after: p.after, before: p.before });
+      const command = REMOTE_PATH_PREFIX + 'node -e ' + shQuote(REMOTE_HISTORY_SCRIPT) + ' -- ' + shQuote(payload);
+      const result = await runSshCommand(machine.target, command, 20000);
+      if (result.code !== 0) throw new UserError('HERDR_FAILED', 'Remote transcript helper failed. Retry after checking Node on the machine, or open Terminal.');
+      return parseRemoteHelperStdout(result.stdout);
+    }
+    const resolved = await resolveChatFile(p, target);
+    if (!resolved.available) return resolved;
+    const data = transcripts.read(resolved.file, resolved.pane.agent, {
+      identity: p.identity,
+      after: p.after,
+      before: p.before,
+    });
+    return { available: true, agent: resolved.pane.agent, ...data };
+  },
+
+  // Page send: require the live transcript identity to match before delivering a prompt.
+  async 'chat/prompt'(p) {
+    const target = str(req(p, 'target'), ID_RE, 'target');
+    if (!target.includes(':')) throw new UserError('INVALID_ARGS', 'target must be a pane id.');
+    const expected = typeof p.identity === 'string' && p.identity ? p.identity : null;
+    if (!expected) throw new UserError('INVALID_ARGS', 'identity is required.');
+    const text = positionalText(req(p, 'text'), 'text');
+    const machine = await resolveMachine(p.machine);
+    if (machine.kind === 'ssh') {
+      const session = p.session || machine.defaultSession || 'default';
+      str(session, SESSION_RE, 'session');
+      const payload = JSON.stringify({ action: 'prompt', target, session, identity: expected, text });
+      const command = REMOTE_PATH_PREFIX + 'node -e ' + shQuote(REMOTE_HISTORY_SCRIPT) + ' -- ' + shQuote(payload);
+      const result = await runSshCommand(machine.target, command, 120000);
+      if (result.code !== 0) throw new UserError('HERDR_FAILED', 'Could not deliver the message on the remote machine.');
+      try { return assertRemotePromptBody(parseRemoteHelperStdout(result.stdout)); }
+      catch (err) {
+        if (err.code) throw new UserError(err.code, err.message);
+        throw err;
+      }
+    }
+    const resolved = await resolveChatFile(p, target);
+    if (!resolved.available) throw new UserError('UNAVAILABLE', resolved.reason || 'Chat is unavailable.');
+    if (transcripts.fileIdentity(resolved.file) !== expected) {
+      throw new UserError('SESSION_MISMATCH', 'Live transcript identity does not match the conversation shown.');
+    }
+    return METHODS['agents/prompt']({ ...p, target, text, wait: false });
+  },
+
+  // ---- live terminal for the page (xterm mirror of one pane) ----
+  // The pane's visible screen with colors, plus its size in cells. `since` skips unchanged frames.
+  async 'term/screen'(p) {
+    const pane = str(req(p, 'target'), ID_RE, 'target');
+    if (!pane.includes(':')) throw new UserError('INVALID_ARGS', 'target must be a pane id.');
+    const r = await herdr(p, ['pane', 'read', pane, '--source', 'visible', '--format', 'ansi'], { raw: true, timeoutMs: 10000 });
+    const text = r.text.replace(/\r?\n$/, '');
+    const hash = fnv1a(text);
+    if (p.since && p.since === hash) return { unchanged: true, hash };
+    const lines = text.split('\n').map((l) => l.replace(/\r$/, ''));
+    let cols = 0;
+    for (const line of lines) cols = Math.max(cols, displayWidth(stripAnsi(line)));
+    return {
+      hash,
+      text: lines.join('\r\n'),
+      cols: Math.min(500, Math.max(20, cols)),
+      rows: Math.min(300, Math.max(1, lines.length)),
+    };
+  },
+
+  // Raw terminal input from xterm (keystrokes, escape sequences, pastes), written as-is to the pane.
+  async 'term/input'(p) {
+    const pane = str(req(p, 'target'), ID_RE, 'target');
+    if (!pane.includes(':')) throw new UserError('INVALID_ARGS', 'target must be a pane id.');
+    if (typeof p.data !== 'string' || !p.data || p.data.length > 100000) {
+      throw new UserError('INVALID_ARGS', 'data must be 1..100000 chars.');
+    }
+    // herdr's CLI rejects positional text starting with "-" (no "--" separator), so any chunk that
+    // would start with "-" sends that dash as the "-" key first.
+    let data = p.data.replace(/\0/g, '');
+    while (data) {
+      let dashes = 0;
+      while (dashes < data.length && dashes < 32 && data[dashes] === '-') dashes += 1;
+      if (dashes) {
+        await herdr(p, ['pane', 'send-keys', pane, ...Array(dashes).fill('-')]);
+        data = data.slice(dashes);
+        continue;
+      }
+      const chunk = data.slice(0, 20000);
+      await herdr(p, ['pane', 'send-text', pane, chunk]);
+      data = data.slice(chunk.length);
+    }
+    return { ok: true };
   },
 
   async 'panes/wait_output'(p) {
@@ -715,11 +866,37 @@ function slimPane(pn) {
     focused: pn.focused,
   };
 }
+// FNV-1a hash of a screen, to skip unchanged frames.
+function fnv1a(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36) + ':' + s.length;
+}
+// Terminal cell width: East Asian wide/fullwidth and most emoji take two cells.
+function displayWidth(s) {
+  let w = 0;
+  for (const ch of s) {
+    const c = ch.codePointAt(0);
+    if (c < 32 || (c >= 0x7f && c < 0xa0) || (c >= 0x300 && c <= 0x36f) || c === 0x200b || (c >= 0xfe00 && c <= 0xfe0f)) continue;
+    const wide =
+      (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf && c !== 0x303f) || (c >= 0xac00 && c <= 0xd7a3) ||
+      (c >= 0xf900 && c <= 0xfaff) || (c >= 0xfe30 && c <= 0xfe4f) || (c >= 0xff00 && c <= 0xff60) ||
+      (c >= 0xffe0 && c <= 0xffe6) || (c >= 0x1f300 && c <= 0x1faff) || (c >= 0x20000 && c <= 0x3fffd);
+    w += wide ? 2 : 1;
+  }
+  return w;
+}
 function stripAnsi(s) {
   // eslint-disable-next-line no-control-regex
   return String(s || '').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)/g, '');
 }
 
+if (process.env.HERDR_EXPORT_FOR_TESTS === "1") {
+  module.exports = { REMOTE_HISTORY_SCRIPT_FOR_TESTS: REMOTE_HISTORY_SCRIPT };
+} else {
 // ---------- JSON-RPC loop ----------
 readline.createInterface({ input: process.stdin }).on('line', async (line) => {
   let request;
@@ -745,3 +922,4 @@ readline.createInterface({ input: process.stdin }).on('line', async (line) => {
     reply({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: `${code}: ${String(err.message || err)}`, data: { code } } });
   }
 });
+}
