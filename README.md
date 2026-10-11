@@ -76,8 +76,9 @@ Safety boundaries:
 - Chat resolves transcripts through herdr's session identity, or a unique
   Codex/OMP process/start-time/cwd match when its integration did not report an id.
   It never reads an arbitrary path from the page. For saved SSH machines,
-  a bundled read-only helper runs over the existing SSH connection without
-  installing files remotely. Agents without a unique match can use Terminal.
+  a bundled helper reads transcripts and sends identity-checked Chat prompts
+  over the existing SSH connection without installing files remotely. Agents
+  without a unique match can use Terminal.
   Chat reads transcript pages on complete JSONL boundaries (up to 512 KiB per
   record; longer records show a marker) and keeps at most 240 message nodes in
   the page. The cache is byte-bounded and keeps the recent tail independently
