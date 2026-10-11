@@ -3,9 +3,15 @@
   "minCindyVersion": "0.1.97",
   "id": "herdr",
   "name": "herdr",
-  "description": "Manage herdr terminal sessions, workspaces, panes and coding agents on this computer and on SSH machines saved in herdr. Includes a live side panel of agent states.",
+  "description": "Manage herdr coding agents and the workspaces that hold them, on this computer and on SSH machines saved in herdr. Includes a herdr page to follow agents, start new ones (optionally on a new git worktree) and answer them.",
   "whenToUse": "The user mentions herdr, herdr sessions/workspaces/tabs/panes, or wants to check, read, prompt, start, wait on or coordinate coding agents (Claude, Codex, Grok, Pi, etc.) running in herdr, locally or on a remote herdr machine (e.g. a dev box reachable over SSH).",
-  "version": "1.0.0",
+  "locales": {
+    "en": "locales/en.json",
+    "zh-CN": "locales/zh-CN.json",
+    "ja": "locales/ja.json",
+    "ko": "locales/ko.json"
+  },
+  "version": "1.1.0",
   "entry": "main.js",
   "icon": "assets/icon.png",
   "command": "herdr",
@@ -209,7 +215,7 @@
     },
     {
       "name": "herdr_send_keys",
-      "description": "Send logical key presses (e.g. esc, enter, ctrl+c, up) to an agent or pane. Only answer an agent's approval/question UI when the user told you what to choose.",
+      "description": "Send logical key presses (e.g. esc, enter, ctrl+c, up) to an agent or pane, optionally typing literal text first (text needs a pane id). Only answer an agent's approval/question UI when the user told you what to choose.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -230,14 +236,16 @@
             "items": {
               "type": "string"
             },
-            "minItems": 1,
             "maxItems": 32,
-            "description": "Key names in order, e.g. [\"esc\"] or [\"ctrl+c\"]."
+            "description": "Key names in order, e.g. [\"esc\"] or [\"ctrl+c\"]; pressed after text."
+          },
+          "text": {
+            "type": "string",
+            "description": "Optional literal text typed before the keys (no Enter). Needs a pane id target. Cannot start with \"-\"."
           }
         },
         "required": [
-          "target",
-          "keys"
+          "target"
         ]
       }
     },
@@ -277,35 +285,6 @@
         "required": [
           "pane_id",
           "command"
-        ]
-      }
-    },
-    {
-      "name": "herdr_send_text",
-      "description": "Type literal text into a pane without pressing Enter.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "machine": {
-            "type": "string",
-            "description": "\"local\" (default) or a saved herdr machine label."
-          },
-          "session": {
-            "type": "string",
-            "description": "Named herdr session; omit for default."
-          },
-          "pane_id": {
-            "type": "string",
-            "description": "Pane id."
-          },
-          "text": {
-            "type": "string",
-            "description": "Text to type. Cannot start with \"-\"."
-          }
-        },
-        "required": [
-          "pane_id",
-          "text"
         ]
       }
     },
@@ -435,8 +414,8 @@
       }
     },
     {
-      "name": "herdr_create",
-      "description": "Create a new herdr workspace, or a new tab in an existing workspace, only when the user asked for one. Returns the new ids including the root pane id. Does not take the user's focus unless focus is true.",
+      "name": "herdr_workspace",
+      "description": "Manage herdr workspaces, only when the user asked. action create: new workspace in a folder; tab_create: new tab in workspace_id; worktree_create: new git branch + worktree checkout opened as a workspace (cwd or workspace_id must be inside the repo); worktree_open: open an existing worktree by path or branch; rename: relabel workspace_id; worktree_list: list worktrees of a repo. For the four create/open actions, set agent_kind to start that coding agent in the new root pane (returns agent.status ready or blocked; blocked means it is waiting on a prompt such as folder trust: read it with herdr_read and answer only as the user decides). If the agent fails to start, a new plain workspace/tab is closed again; worktrees are kept. Never takes the user's focus unless focus is true.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -448,32 +427,94 @@
             "type": "string",
             "description": "Named herdr session; omit for default."
           },
-          "kind": {
+          "action": {
             "type": "string",
             "enum": [
-              "workspace",
-              "tab"
+              "create",
+              "tab_create",
+              "worktree_create",
+              "worktree_open",
+              "rename",
+              "worktree_list"
             ]
-          },
-          "workspace_id": {
-            "type": "string",
-            "description": "Required when kind is tab."
           },
           "cwd": {
             "type": "string",
-            "description": "Optional absolute working directory on that machine."
+            "description": "Folder on that machine: absolute or \"~/...\". For create/tab_create the new shell starts there; for worktree actions it is any folder inside the git repository."
+          },
+          "workspace_id": {
+            "type": "string",
+            "description": "Existing workspace: required for tab_create and rename; for worktree actions it can replace cwd to name the repository."
           },
           "label": {
             "type": "string",
-            "description": "Optional label."
+            "description": "Workspace/tab label. Required for rename."
+          },
+          "branch": {
+            "type": "string",
+            "description": "worktree_create: new branch name (required). worktree_open: branch to open (or give path)."
+          },
+          "base": {
+            "type": "string",
+            "description": "worktree_create: ref to branch from (default: the repository's current HEAD)."
+          },
+          "path": {
+            "type": "string",
+            "description": "Worktree folder. worktree_create defaults to ~/.worktrees/<repo>/<branch>."
+          },
+          "agent_kind": {
+            "type": "string",
+            "enum": [
+              "pi",
+              "claude",
+              "codex",
+              "gemini",
+              "cursor",
+              "devin",
+              "agy",
+              "cline",
+              "omp",
+              "mastracode",
+              "opencode",
+              "copilot",
+              "kimi",
+              "kiro",
+              "droid",
+              "amp",
+              "grok",
+              "hermes",
+              "kilo",
+              "qodercli",
+              "qwen",
+              "maki",
+              "muse"
+            ],
+            "description": "Coding agent to start in the new root pane. Omit to only create."
+          },
+          "agent_name": {
+            "type": "string",
+            "description": "Unique agent name: lowercase, starts with a letter, up to 32 chars. Default <kind>-<random>."
+          },
+          "agent_args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional native CLI args for the agent."
           },
           "focus": {
             "type": "boolean",
-            "description": "Switch the user's view to it. Default false."
+            "description": "Switch the user's view to it. Only true if the user asked."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 300000,
+            "description": "Agent startup wait (default 60000)."
           }
         },
         "required": [
-          "kind"
+          "action"
         ]
       }
     },
@@ -512,7 +553,7 @@
     },
     {
       "name": "herdr_close",
-      "description": "Close a pane, tab or workspace, stopping the processes in it. Only call when the user explicitly asked to close that specific item. The user must also approve a confirmation dialog; if they decline (USER_DECLINED), do not retry.",
+      "description": "Close a pane, tab or workspace, stopping the processes in it; or, with kind \"worktree\", remove the git worktree checkout behind a workspace (closes it and deletes the folder; the branch is kept). Only call when the user explicitly asked for that specific item. The user must also approve a confirmation dialog; if they decline (USER_DECLINED), do not retry.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -529,12 +570,17 @@
             "enum": [
               "pane",
               "tab",
-              "workspace"
+              "workspace",
+              "worktree"
             ]
           },
           "id": {
             "type": "string",
-            "description": "Pane, tab or workspace id."
+            "description": "Pane, tab or workspace id; for kind worktree, the worktree workspace id."
+          },
+          "force": {
+            "type": "boolean",
+            "description": "kind worktree only: remove even with uncommitted changes. Only if the user explicitly asked."
           }
         },
         "required": [

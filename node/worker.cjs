@@ -94,12 +94,35 @@ function posInt(v, label, min, max) {
   if (!Number.isInteger(n) || n < min || n > max) throw new UserError('INVALID_ARGS', `${label} must be an integer in ${min}..${max}.`);
   return n;
 }
-function absPath(v, label) {
-  if (v === undefined || v === null || v === '') return undefined;
-  if (typeof v !== 'string' || !(v.startsWith('/') || v.startsWith('~')) || v.length > 4096 || /[\0\n\r]/.test(v)) {
-    throw new UserError('INVALID_ARGS', `${label} must be an absolute path.`);
+// A folder relative to the home directory of whichever machine runs herdr.
+// herdr does not expand "~", so the worker expands it locally and the remote shell expands $HOME.
+class HomePath {
+  constructor(rel) {
+    this.rel = rel;
   }
+}
+function folderArg(v, label) {
+  if (v === undefined || v === null || v === '') return undefined;
+  if (typeof v !== 'string' || v.length > 4096 || /[\0\n\r]/.test(v)) {
+    throw new UserError('INVALID_ARGS', `${label} must be an absolute path or start with ~/.`);
+  }
+  const t = v.trim();
+  if (t === '~') return new HomePath('');
+  if (t.startsWith('~/')) return new HomePath(t.slice(2).replace(/\/+$/, ''));
+  if (t.startsWith('/')) return t.length > 1 ? t.replace(/\/+$/, '') : t;
+  throw new UserError('INVALID_ARGS', `${label} must be an absolute path or start with ~/.`);
+}
+const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,199}$/;
+function branchArg(v, label) {
+  str(v, BRANCH_RE, label);
+  if (v.includes('..') || v.endsWith('/') || v.endsWith('.lock')) throw new UserError('INVALID_ARGS', `Invalid ${label}: ${JSON.stringify(v)}`);
   return v;
+}
+function labelArg(v, label = 'label') {
+  if (typeof v !== 'string') throw new UserError('INVALID_ARGS', `${label} must be text.`);
+  const t = v.replace(/[\0-\x1f\x7f]/g, ' ').trim();
+  if (!t) throw new UserError('INVALID_ARGS', `Missing ${label}.`);
+  return positionalText(t, label, 80);
 }
 
 // ---------- machine resolution ----------
@@ -170,10 +193,15 @@ function sshControlDir() {
   return controlDirCache;
 }
 
+function remoteArg(a) {
+  if (a instanceof HomePath) return a.rel ? '"$HOME"/' + shQuote(a.rel) : '"$HOME"';
+  return shQuote(a);
+}
+
 function runSsh(target, args, timeoutMs) {
   const ssh = findBinary('ssh');
   if (!ssh) return Promise.reject(new UserError('SSH_NOT_FOUND', 'ssh is not available on this computer.'));
-  const remoteCmd = REMOTE_PATH_PREFIX + ['herdr', ...args].map(shQuote).join(' ');
+  const remoteCmd = REMOTE_PATH_PREFIX + ['herdr', ...args].map(remoteArg).join(' ');
   const sshArgs = ['-n', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15'];
   const controlDir = sshControlDir();
   if (controlDir) {
@@ -252,16 +280,44 @@ async function herdr(params, args, { timeoutMs = DEFAULT_TIMEOUT_MS, useSession 
   const session = params.session === undefined || params.session === null || params.session === ''
     ? (machine.kind === 'ssh' ? machine.defaultSession : undefined)
     : str(params.session, SESSION_RE, 'session');
-  const full = useSession && session ? ['--session', session, ...args] : args;
-  const res = machine.kind === 'ssh'
-    ? await runSsh(machine.target, full, timeoutMs)
-    : await runLocal(full, timeoutMs);
+  const withSession = useSession && session ? ['--session', session, ...args] : args;
+  let res;
+  if (machine.kind === 'ssh') {
+    res = await runSsh(machine.target, withSession, timeoutMs);
+  } else {
+    const full = withSession.map((a) => (a instanceof HomePath ? path.join(os.homedir(), a.rel) : a));
+    for (const a of withSession) {
+      if (a instanceof HomePath) assertLocalFolder(path.join(os.homedir(), a.rel));
+    }
+    res = await runLocal(full, timeoutMs);
+  }
   if (raw) {
     if (res.code !== 0) parseHerdr(res);
     return { machine: machine.label, session: session || 'default', text: res.stdout };
   }
   const result = parseHerdr(res);
   return { machine: machine.label, session: session || 'default', result };
+}
+
+// herdr silently falls back to the home folder when --cwd does not exist; fail loudly instead.
+function assertLocalFolder(p) {
+  let st;
+  try {
+    st = fs.statSync(p);
+  } catch {
+    throw new UserError('FOLDER_NOT_FOUND', `Folder not found on this computer: ${p}`);
+  }
+  if (!st.isDirectory()) throw new UserError('FOLDER_NOT_FOUND', `Not a folder: ${p}`);
+}
+function localFolderCheck(p, machine) {
+  if (typeof p === 'string' && (machine === undefined || machine === null || machine === '' || machine === 'local')) assertLocalFolder(p);
+}
+
+const AGENT_START_NOTE_BLOCKED =
+  'The agent started but is waiting for an answer (for example a folder-trust or login prompt). Read it with herdr_read and answer only as the user decides.';
+
+function randomSuffix() {
+  return Math.random().toString(36).slice(2, 6).padEnd(4, '0');
 }
 
 // ---------- methods ----------
@@ -300,6 +356,9 @@ const METHODS = {
         tab_count: w.tab_count,
         pane_count: w.pane_count,
         focused: w.focused,
+        worktree: w.worktree
+          ? { linked: !!w.worktree.is_linked_worktree, repo: w.worktree.repo_name, path: w.worktree.checkout_path }
+          : null,
       })),
       tabs: (s.tabs || []).map((t) => ({
         tab_id: t.tab_id,
@@ -396,13 +455,23 @@ const METHODS = {
     return herdr(p, args, { timeoutMs: t + 10000 });
   },
 
+  // Keys and/or literal text. Text needs a pane id (herdr has no agent send-text) and is typed before the keys.
   async 'keys'(p) {
     const target = str(req(p, 'target'), ID_RE, 'target');
     const keys = toArray(p.keys);
-    if (!keys.length || keys.length > 32) throw new UserError('INVALID_ARGS', 'keys must contain 1..32 key names.');
+    const hasText = p.text !== undefined && p.text !== null && p.text !== '';
+    if (!hasText && !keys.length) throw new UserError('INVALID_ARGS', 'Give keys, text, or both.');
+    if (keys.length > 32) throw new UserError('INVALID_ARGS', 'keys must contain at most 32 key names.');
     for (const k of keys) str(k, KEY_RE, 'key');
     const isPane = target.includes(':');
-    return herdr(p, [isPane ? 'pane' : 'agent', 'send-keys', target, ...keys]);
+    let typed;
+    if (hasText) {
+      if (!isPane) throw new UserError('INVALID_ARGS', 'text needs a pane id such as "w1:p2" (find it with herdr_overview).');
+      typed = await herdr(p, ['pane', 'send-text', target, positionalText(p.text, 'text', 20000)]);
+      if (!keys.length) return typed;
+    }
+    const pressed = await herdr(p, [isPane ? 'pane' : 'agent', 'send-keys', target, ...keys]);
+    return typed ? { ...pressed, typed_text: true } : pressed;
   },
 
   async 'panes/run'(p) {
@@ -416,12 +485,6 @@ const METHODS = {
       return { ...r, waited: w.result };
     }
     return r;
-  },
-
-  async 'panes/send_text'(p) {
-    const pane = str(req(p, 'pane_id'), ID_RE, 'pane_id');
-    const text = positionalText(req(p, 'text'), 'text', 20000);
-    return herdr(p, ['pane', 'send-text', pane, text]);
   },
 
   async 'panes/wait_output'(p) {
@@ -438,37 +501,177 @@ const METHODS = {
     const direction = p.direction === undefined ? 'right' : p.direction;
     if (direction !== 'right' && direction !== 'down') throw new UserError('INVALID_ARGS', 'direction must be right or down.');
     const args = ['pane', 'split', pane, '--direction', direction, p.focus ? '--focus' : '--no-focus'];
-    const cwd = absPath(p.cwd, 'cwd');
+    const cwd = folderArg(p.cwd, 'cwd');
+    localFolderCheck(cwd, p.machine);
     if (cwd) args.push('--cwd', cwd);
     return herdr(p, args);
   },
 
   async 'workspaces/create'(p) {
     const args = ['workspace', 'create', p.focus ? '--focus' : '--no-focus'];
-    const cwd = absPath(p.cwd, 'cwd');
+    const cwd = folderArg(p.cwd, 'cwd');
+    localFolderCheck(cwd, p.machine);
     if (cwd) args.push('--cwd', cwd);
-    if (p.label) args.push('--label', positionalText(p.label, 'label', 64));
+    if (p.label) args.push('--label', labelArg(p.label));
     return herdr(p, args);
+  },
+
+  async 'workspaces/rename'(p) {
+    const id = str(req(p, 'workspace_id'), ID_RE, 'workspace_id');
+    return herdr(p, ['workspace', 'rename', id, labelArg(req(p, 'label'))]);
   },
 
   async 'tabs/create'(p) {
     const args = ['tab', 'create', '--workspace', str(req(p, 'workspace_id'), ID_RE, 'workspace_id'), p.focus ? '--focus' : '--no-focus'];
-    const cwd = absPath(p.cwd, 'cwd');
+    const cwd = folderArg(p.cwd, 'cwd');
+    localFolderCheck(cwd, p.machine);
     if (cwd) args.push('--cwd', cwd);
-    if (p.label) args.push('--label', positionalText(p.label, 'label', 64));
+    if (p.label) args.push('--label', labelArg(p.label));
     return herdr(p, args);
   },
 
-  async 'create'(p) {
-    if (p.kind === 'workspace') return METHODS['workspaces/create'](p);
-    if (p.kind === 'tab') return METHODS['tabs/create'](p);
-    throw new UserError('INVALID_ARGS', 'kind must be workspace or tab.');
+  async 'worktrees/list'(p) {
+    const args = ['worktree', 'list'];
+    if (p.workspace_id) args.push('--workspace', str(p.workspace_id, ID_RE, 'workspace_id'));
+    const cwd = folderArg(p.cwd, 'cwd');
+    if (!p.workspace_id && !cwd) throw new UserError('INVALID_ARGS', 'Give workspace_id or cwd (a folder inside the git repository).');
+    localFolderCheck(cwd, p.machine);
+    if (cwd) args.push('--cwd', cwd);
+    return herdr(p, args);
+  },
+
+  // New branch + checkout under ~/.worktrees/<repo>/<branch> (unless path is given), opened as a workspace.
+  async 'worktrees/create'(p) {
+    const args = ['worktree', 'create', p.focus ? '--focus' : '--no-focus'];
+    const cwd = folderArg(p.cwd, 'cwd');
+    if (p.workspace_id) args.push('--workspace', str(p.workspace_id, ID_RE, 'workspace_id'));
+    else if (!cwd) throw new UserError('INVALID_ARGS', 'Give cwd (a folder inside the git repository) or workspace_id.');
+    localFolderCheck(cwd, p.machine);
+    if (cwd) args.push('--cwd', cwd);
+    args.push('--branch', branchArg(req(p, 'branch'), 'branch'));
+    if (p.base) args.push('--base', branchArg(p.base, 'base'));
+    const wtPath = folderArg(p.path, 'path');
+    if (wtPath) args.push('--path', wtPath);
+    if (p.label) args.push('--label', labelArg(p.label));
+    return herdr(p, args, { timeoutMs: 90000 });
+  },
+
+  async 'worktrees/open'(p) {
+    const args = ['worktree', 'open', p.focus ? '--focus' : '--no-focus'];
+    const cwd = folderArg(p.cwd, 'cwd');
+    if (p.workspace_id) args.push('--workspace', str(p.workspace_id, ID_RE, 'workspace_id'));
+    else if (!cwd) throw new UserError('INVALID_ARGS', 'Give cwd (a folder inside the git repository) or workspace_id.');
+    localFolderCheck(cwd, p.machine);
+    if (cwd) args.push('--cwd', cwd);
+    const wtPath = folderArg(p.path, 'path');
+    if (wtPath) args.push('--path', wtPath);
+    else if (p.branch) args.push('--branch', branchArg(p.branch, 'branch'));
+    else throw new UserError('INVALID_ARGS', 'Give the worktree path or branch to open.');
+    if (p.label) args.push('--label', labelArg(p.label));
+    return herdr(p, args, { timeoutMs: 60000 });
+  },
+
+  // Create a workspace / tab / worktree and, when agent_kind is set, start that agent in its root pane.
+  async 'workspaces/launch'(p) {
+    const action = p.action || 'create';
+    const creators = {
+      create: 'workspaces/create',
+      tab_create: 'tabs/create',
+      worktree_create: 'worktrees/create',
+      worktree_open: 'worktrees/open',
+    };
+    if (!creators[action]) throw new UserError('INVALID_ARGS', `Unsupported action "${action}".`);
+    let kind;
+    let name;
+    if (p.agent_kind) {
+      kind = p.agent_kind;
+      if (!AGENT_KINDS.has(kind)) throw new UserError('INVALID_ARGS', `Unsupported agent kind "${kind}".`);
+      name = p.agent_name ? str(p.agent_name, AGENT_NAME_RE, 'agent name') : `${kind}-${randomSuffix()}`;
+    }
+    const created = await METHODS[creators[action]](p);
+    const r = created.result || {};
+    const root = r.root_pane || {};
+    log(`launch: ${action} done (${root.pane_id || 'no pane'})${kind ? `, starting ${kind}` : ''}`);
+    const out = {
+      machine: created.machine,
+      session: created.session,
+      action,
+      workspace_id: (r.workspace && r.workspace.workspace_id) || root.workspace_id,
+      tab_id: (r.tab && r.tab.tab_id) || root.tab_id,
+      pane_id: root.pane_id,
+      cwd: root.foreground_cwd || root.cwd,
+      worktree: r.worktree ? { branch: r.worktree.branch, path: r.worktree.path } : undefined,
+    };
+    // herdr falls back to the home folder when a remote --cwd does not exist (local folders are checked up front).
+    if (typeof p.cwd === 'string' && p.cwd.startsWith('/') && action !== 'worktree_create' && action !== 'worktree_open' && out.cwd) {
+      const want = p.cwd.replace(/\/+$/, '');
+      if (out.cwd !== want && !out.cwd.endsWith(want)) out.note = `herdr opened ${out.cwd} instead of ${want}; that folder may not exist on ${out.machine}.`;
+    }
+    if (!kind) return out;
+    if (!root.pane_id) throw new UserError('HERDR_ERROR', 'herdr did not return the new pane id, so no agent was started.');
+    try {
+      await METHODS['agents/start']({
+        machine: p.machine,
+        session: p.session,
+        name,
+        kind,
+        pane_id: root.pane_id,
+        timeout_ms: p.timeout_ms || 60000,
+        agent_args: p.agent_args,
+      });
+      return { ...out, agent: { name, kind, status: 'ready' } };
+    } catch (err) {
+      if (err instanceof UserError && err.code === 'AGENT_NOT_READY') {
+        return { ...out, agent: { name, kind, status: 'blocked' }, note: [out.note, AGENT_START_NOTE_BLOCKED].filter(Boolean).join(' ') };
+      }
+      // Undo a plain workspace/tab we just created so it does not linger without an agent.
+      // Worktrees are kept: their checkout and branch are real git state.
+      let cleanup = '';
+      if (action === 'create' || action === 'tab_create') {
+        const what = action === 'create' ? 'workspace' : 'tab';
+        const id = action === 'create' ? out.workspace_id : out.tab_id;
+        try {
+          await herdr(p, [what, 'close', id]);
+          cleanup = ` The new ${what} was closed again.`;
+        } catch {
+          cleanup = ` The new ${what} ${id} is still open without an agent.`;
+        }
+      } else {
+        cleanup = ` The worktree workspace ${out.workspace_id} is open without an agent.`;
+      }
+      const code = err instanceof UserError ? err.code : 'HERDR_ERROR';
+      throw new UserError(code, `Could not start ${kind}: ${String(err.message || err)}.${cleanup}`);
+    }
+  },
+
+  // Agent tool entry point for workspace management.
+  async 'workspace'(p) {
+    const action = req(p, 'action');
+    switch (action) {
+      case 'create':
+      case 'tab_create':
+      case 'worktree_create':
+      case 'worktree_open':
+        return METHODS['workspaces/launch'](p);
+      case 'rename':
+        return METHODS['workspaces/rename'](p);
+      case 'worktree_list':
+        return METHODS['worktrees/list'](p);
+      default:
+        throw new UserError('INVALID_ARGS', 'action must be create, tab_create, rename, worktree_create, worktree_open or worktree_list.');
+    }
   },
 
   async 'close'(p) {
     const kind = req(p, 'kind');
     const id = str(req(p, 'id'), ID_RE, 'id');
-    if (!['pane', 'tab', 'workspace'].includes(kind)) throw new UserError('INVALID_ARGS', 'kind must be pane, tab or workspace.');
+    if (kind === 'worktree') {
+      // Closes the worktree's workspace and deletes the checkout; the branch stays.
+      const args = ['worktree', 'remove', '--workspace', id];
+      if (p.force === true) args.push('--force');
+      return herdr(p, args, { timeoutMs: 60000 });
+    }
+    if (!['pane', 'tab', 'workspace'].includes(kind)) throw new UserError('INVALID_ARGS', 'kind must be pane, tab, workspace or worktree.');
     return herdr(p, [kind, 'close', id]);
   },
 

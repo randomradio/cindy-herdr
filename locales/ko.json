@@ -1,0 +1,52 @@
+{
+  "name": "herdr",
+  "description": "이 컴퓨터와 herdr에 저장된 SSH 머신의 herdr 코딩 에이전트와 이를 담는 워크스페이스를 관리합니다. herdr 페이지에서 에이전트를 확인하고, 새로 시작하고(새 git worktree에서도 가능), 응답할 수 있습니다.",
+  "whenToUse": "사용자가 herdr나 herdr의 세션 / 워크스페이스 / 탭 / 창을 언급하거나, herdr에서 실행 중인 코딩 에이전트(Claude, Codex, Grok, Pi 등)를 확인·읽기·프롬프트 전송·시작·대기·조율하려는 경우. 로컬과 원격 herdr 머신(예: SSH로 접속하는 개발 머신) 모두 해당됩니다.",
+  "tools": {
+    "herdr_machines": {
+      "description": "herdr에 연결할 수 있는 위치를 나열합니다: \"local\"(이 컴퓨터)과 `herdr machine add`로 저장된 모든 SSH 머신 및 각 머신의 기본 원격 세션. label을 다른 herdr 도구의 `machine` 인수로 사용하세요."
+    },
+    "herdr_sessions": {
+      "description": "머신의 이름 있는 herdr 세션(상주 서버)과 각 세션의 실행 여부를 나열합니다."
+    },
+    "herdr_overview": {
+      "description": "herdr 세션 하나의 스냅샷을 가져옵니다: 워크스페이스, 탭, 창(작업 디렉터리, 제목), 인식된 에이전트와 그 상태(idle / working / blocked / done / unknown). ID를 찾을 때 여기서 시작하세요. ID는 불투명하며 머신 하나 + 세션 하나 안에서만 유효하므로 머신 간에 재사용하지 마세요."
+    },
+    "herdr_agent_get": {
+      "description": "에이전트 하나의 세부 정보와 수명 주기 상태를 표시합니다."
+    },
+    "herdr_read": {
+      "description": "창 또는 에이전트의 최근 터미널 출력을 읽습니다(ANSI 제거). 무엇을 보낼지 정하기 전과, 대기 결과가 blocked일 때 사용하세요."
+    },
+    "herdr_prompt_agent": {
+      "description": "herdr에서 실행 중인 코딩 에이전트에 프롬프트를 보내고, 기본적으로 안정될 때(idle/done/blocked)까지 기다립니다. 최종 상태를 반환하므로 답변은 herdr_read로 가져오세요. 에이전트가 승인이나 질문을 기다리는 중이면 AGENT_BLOCKED로 거부됩니다: 내용을 읽고 사용자에게 확인한 뒤 답하세요. 시간 초과는 전달되지 않았다는 증거가 아니므로 무작정 다시 보내지 마세요."
+    },
+    "herdr_wait_agent": {
+      "description": "에이전트가 특정 상태가 될 때까지 기다립니다. `until`을 생략하면 idle, done, blocked 중 하나를 기다립니다."
+    },
+    "herdr_send_keys": {
+      "description": "에이전트나 창에 논리 키(esc, enter, ctrl+c, up 등)를 보내며, 먼저 텍스트를 그대로 입력할 수도 있습니다(text에는 창 ID가 필요). 에이전트의 승인 / 질문 화면에는 사용자가 무엇을 고를지 알려 준 경우에만 응답하세요."
+    },
+    "herdr_run_command": {
+      "description": "기존 창에서 셸 명령을 실행합니다(텍스트 + Enter). 출력에 특정 문자열이 나타날 때까지 기다릴 수도 있습니다. 창은 에이전트 실행 중이 아니라 셸 프롬프트 상태여야 합니다."
+    },
+    "herdr_wait_output": {
+      "description": "창의 최근 출력에 특정 문자열이 포함되거나 Rust 정규식과 일치할 때까지 기다립니다. 기존 출력이 바로 일치할 수도 있습니다."
+    },
+    "herdr_split_pane": {
+      "description": "기존 창을 분할해 옆에 새 셸 창을 만들며, 사용자의 포커스를 빼앗지 않습니다. 새 창 ID는 result.pane.pane_id로 반환됩니다. 넓은 창은 오른쪽으로, 좁거나 긴 창은 아래로 분할하세요."
+    },
+    "herdr_start_agent": {
+      "description": "셸 프롬프트 상태인 기존 창에서 지원되는 코딩 에이전트(claude, codex, grok, pi, cursor, gemini, opencode 등)를 시작합니다. 보통 먼저 창을 분할합니다. 에이전트가 준비되면 반환되며, 이후 herdr_prompt_agent를 사용하세요."
+    },
+    "herdr_workspace": {
+      "description": "herdr 워크스페이스를 관리합니다. 사용자가 요청한 경우에만 사용하세요. action: create는 폴더에 새 워크스페이스를 만들고, tab_create는 workspace_id에 새 탭을 만들고, worktree_create는 새 git 브랜치와 worktree 체크아웃을 만들어 워크스페이스로 엽니다(cwd 또는 workspace_id가 저장소 안에 있어야 함). worktree_open은 기존 worktree를 경로나 브랜치로 열고, rename은 workspace_id의 이름을 바꾸며, worktree_list는 저장소의 worktree를 나열합니다. 네 가지 생성/열기 작업에서 agent_kind를 지정하면 새 루트 창에서 해당 코딩 에이전트를 시작합니다(agent.status는 ready 또는 blocked. blocked는 폴더 신뢰 같은 질문에 답을 기다리는 상태이니 herdr_read로 읽고 사용자가 정한 대로만 답하세요). 에이전트 시작에 실패하면 새로 만든 일반 워크스페이스/탭은 다시 닫히고 worktree는 유지됩니다. focus가 true가 아니면 사용자의 포커스를 빼앗지 않습니다."
+    },
+    "herdr_focus": {
+      "description": "herdr UI 포커스를 워크스페이스, 탭 또는 에이전트로 전환합니다. 사용자가 전환을 요청한 경우에만 사용하세요."
+    },
+    "herdr_close": {
+      "description": "창, 탭 또는 워크스페이스를 닫고 그 안의 프로세스를 중지합니다. kind가 \"worktree\"이면 워크스페이스의 git worktree 체크아웃을 제거합니다(워크스페이스를 닫고 폴더를 삭제하며 브랜치는 유지). 사용자가 해당 항목을 명시적으로 요청한 경우에만 호출하세요. 사용자는 확인 대화상자에서도 승인해야 하며, 거절한 경우(USER_DECLINED) 다시 시도하지 마세요."
+    }
+  }
+}

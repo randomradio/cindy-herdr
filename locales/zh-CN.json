@@ -1,0 +1,52 @@
+{
+  "name": "herdr",
+  "description": "管理本机及 herdr 中已保存的 SSH 机器上的 herdr 编程 Agent 及其所在工作区。附带 herdr 页面，可实时查看 Agent、新建 Agent（可选在新的 git worktree 上）并回复它们。",
+  "whenToUse": "用户提到 herdr，或 herdr 的会话 / 工作区 / 标签页 / 窗格，或想查看、读取、提示、启动、等待或协调在 herdr 中运行的编程 Agent（Claude、Codex、Grok、Pi 等），无论在本机还是在远程 herdr 机器上（例如通过 SSH 访问的开发机）。",
+  "tools": {
+    "herdr_machines": {
+      "description": "列出可连接 herdr 的位置：\"local\"（本机）以及所有通过 `herdr machine add` 保存的 SSH 机器及其默认远程会话。把其中的 label 作为其它 herdr 工具的 `machine` 参数。"
+    },
+    "herdr_sessions": {
+      "description": "列出某台机器上的命名 herdr 会话（常驻服务）及其是否正在运行。"
+    },
+    "herdr_overview": {
+      "description": "获取一个 herdr 会话的快照：工作区、标签页、窗格（工作目录、标题）以及识别出的 Agent 及其状态（idle / working / blocked / done / unknown）。查找 id 从这里开始。id 是不透明的，仅在一台机器 + 一个会话内有效；不要跨机器复用。"
+    },
+    "herdr_agent_get": {
+      "description": "查看单个 Agent 的详情和生命周期状态。"
+    },
+    "herdr_read": {
+      "description": "读取窗格或 Agent 最近的终端输出（已去除 ANSI）。决定发送内容之前先读，等待结果为 blocked 之后也要读。"
+    },
+    "herdr_prompt_agent": {
+      "description": "向 herdr 中运行的编程 Agent 提交提示，默认等待它稳定（idle/done/blocked）。返回最终状态；再用 herdr_read 获取回答。如果 Agent 正在等待审批或提问，会以 AGENT_BLOCKED 拒绝：先读取内容并询问用户后再回答。超时不能证明提示未送达，不要盲目重发。"
+    },
+    "herdr_wait_agent": {
+      "description": "等待 Agent 进入某个状态。不传 `until` 时等待 idle、done 或 blocked。"
+    },
+    "herdr_send_keys": {
+      "description": "向 Agent 或窗格发送逻辑按键（如 esc、enter、ctrl+c、up），可先输入一段原样文本（text 需要窗格 id）。只有在用户告诉你选什么时，才去回答 Agent 的审批 / 提问界面。"
+    },
+    "herdr_run_command": {
+      "description": "在已有窗格中运行一条 shell 命令（文本 + 回车）。可选等待输出中出现某段字面文本。该窗格应处于 shell 提示符，而不是正在运行 Agent。"
+    },
+    "herdr_wait_output": {
+      "description": "等待窗格最近的输出包含某段字面文本或匹配一个 Rust 正则。已有输出也可能立即匹配。"
+    },
+    "herdr_split_pane": {
+      "description": "拆分已有窗格，在旁边创建一个新的 shell 窗格，不抢占用户焦点。新窗格 id 在 result.pane.pane_id 中返回。宽窗格向右拆，窄 / 高窗格向下拆。"
+    },
+    "herdr_start_agent": {
+      "description": "在处于 shell 提示符的已有窗格中启动一个受支持的编程 Agent（claude、codex、grok、pi、cursor、gemini、opencode 等）。通常先拆分一个窗格。Agent 就绪后返回；之后用 herdr_prompt_agent。"
+    },
+    "herdr_workspace": {
+      "description": "管理 herdr 工作区，仅在用户要求时使用。action：create 在某个文件夹新建工作区；tab_create 在 workspace_id 中新建标签页；worktree_create 新建 git 分支和 worktree 检出并作为工作区打开（cwd 或 workspace_id 须位于仓库内）；worktree_open 按路径或分支打开已有 worktree；rename 重命名 workspace_id；worktree_list 列出仓库的 worktree。对四种新建/打开操作，设置 agent_kind 即可在新的根窗格中启动该编程 Agent（返回 agent.status 为 ready 或 blocked；blocked 表示它在等待回答，例如信任文件夹提示：先用 herdr_read 读取，只按用户的决定回答）。若 Agent 启动失败，新建的普通工作区/标签页会被关闭，worktree 保留。除非 focus 为 true，否则不抢占用户焦点。"
+    },
+    "herdr_focus": {
+      "description": "把 herdr 界面焦点切换到某个工作区、标签页或 Agent。仅在用户要求切换时使用。"
+    },
+    "herdr_close": {
+      "description": "关闭窗格、标签页或工作区，并停止其中的进程；kind 为 \"worktree\" 时，移除工作区背后的 git worktree 检出（关闭工作区并删除该文件夹，分支保留）。只有在用户明确要求处理该项时才调用。用户还必须在确认弹窗中同意；如果用户拒绝（USER_DECLINED），不要重试。"
+    }
+  }
+}

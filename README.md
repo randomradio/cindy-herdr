@@ -6,15 +6,24 @@ on this computer and on SSH machines saved in herdr.
 
 ## What it does
 
-- **herdr page in Cindy's sidebar.** Pick a machine and session, see every
-  workspace, pane and agent with live status (working / blocked / done / idle),
-  click one to follow its terminal output, type a message to prompt the agent
-  (or run a command in a plain shell), and answer approval prompts with quick
-  keys (Enter, Esc, Ctrl+C, arrows, Tab).
+- **herdr page in Cindy's sidebar.** Pick a machine and session and see every
+  coding agent with live status (working / needs an answer / done / idle);
+  plain shells and workspaces without an agent are hidden. Click an agent to
+  follow its output, type to prompt it, and answer approval prompts with quick
+  keys (Enter, Esc, arrows, Tab, Ctrl+C). When an agent needs an answer, the
+  page says so and sends what you type as keystrokes.
+- **New agent.** Choose an agent type, a folder and an optional name, and
+  optionally work on a new git branch (a worktree under
+  `~/.worktrees/<repo>/<branch>`, with an optional base). The page creates the
+  workspace and starts the agent, showing progress while it starts.
+- **Workspace menu.** Rename a workspace, show it in herdr, close it, or remove
+  its git worktree (the branch is kept). Close and remove ask first.
 - **Agent tools.** Cindy can list machines and sessions, snapshot a session, read
-  output, prompt an agent and wait for it, send keys, run commands, split panes,
-  start agents, create workspaces/tabs, switch focus, and close panes/tabs/
-  workspaces. Closing always asks for confirmation in a Cindy dialog.
+  output, prompt an agent and wait for it, send text and keys, run commands,
+  split panes, start agents, manage workspaces (`herdr_workspace`: create, new
+  tab, new or existing worktree, rename, list worktrees, optionally starting an
+  agent), switch focus, and close panes/tabs/workspaces or remove worktrees.
+  Closing always asks for confirmation in a Cindy dialog.
 - **Remote machines.** Any machine saved with `herdr machine add` is reachable;
   commands run over `ssh -o BatchMode=yes` (passwordless SSH required) and reuse
   one connection per machine.
@@ -41,11 +50,15 @@ Safety boundaries:
 - The worker never spawns a local shell; herdr is run with `execFile` and an
   argument array. Remote commands are single-quoted for the remote shell.
 - Only a fixed set of herdr subcommands is exposed. Machine, session, pane,
-  agent and key names are validated before use; paths must be absolute.
+  agent and key names are validated before use; paths must be absolute or
+  start with `~/`, and missing local folders are rejected (herdr would
+  otherwise silently fall back to the home folder).
 - Only `local` and machines already saved in herdr can be targeted.
 - Inherited `HERDR_*` environment is not used to pick a target; sessions are
   always named explicitly.
-- Close actions require a Cindy confirmation dialog and fail closed.
+- Close and worktree-remove actions require a confirmation (a Cindy dialog for
+  Agent calls, an in-page dialog on the herdr page) and fail closed. The page
+  never force-removes a worktree with uncommitted changes.
 
 ## Install from source
 

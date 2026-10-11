@@ -21,16 +21,76 @@
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.61-3.89M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
       </div>
+      <div class="new-wrap">
+        <button id="new-agent" class="new-btn" type="button">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          New agent
+        </button>
+      </div>
       <div id="status" class="status" role="status" aria-live="polite"></div>
-      <nav id="list" class="list scroll" aria-label="herdr panes"></nav>
+      <nav id="list" class="list scroll" aria-label="herdr agents"></nav>
     </aside>
 
     <main class="chat">
       <div id="placeholder" class="placeholder">
-        <p class="placeholder-title">Select a session</p>
-        <p class="placeholder-body">Pick an agent or shell on the left to follow its conversation and send it messages.</p>
+        <p class="placeholder-title">Select an agent</p>
+        <p class="placeholder-body">Pick an agent on the left to follow it and send it messages, or start a new one.</p>
       </div>
 
+      <!-- New agent form -->
+      <section id="launch" class="launch scroll" hidden aria-labelledby="launch-title">
+        <form id="launch-form" class="launch-card" novalidate>
+          <h2 id="launch-title" class="launch-title">New agent</h2>
+          <p id="launch-where" class="launch-sub"></p>
+
+          <label class="form-row">
+            <span class="form-label">Agent</span>
+            <select id="f-kind" required></select>
+          </label>
+
+          <label class="form-row">
+            <span class="form-label">Folder</span>
+            <input id="f-cwd" type="text" list="f-cwd-list" placeholder="~/src/my-project" autocomplete="off" spellcheck="false" required />
+            <datalist id="f-cwd-list"></datalist>
+            <span class="form-hint">Absolute path or ~/… on the selected machine.</span>
+          </label>
+
+          <label class="check-row">
+            <input id="f-wt" type="checkbox" />
+            <span>Work on a new branch (git worktree)</span>
+          </label>
+          <div id="wt-fields" class="wt-fields" hidden>
+            <label class="form-row">
+              <span class="form-label">New branch</span>
+              <input id="f-branch" type="text" placeholder="feat/my-change" autocomplete="off" spellcheck="false" />
+            </label>
+            <label class="form-row">
+              <span class="form-label">Based on <span class="optional">(optional)</span></span>
+              <input id="f-base" type="text" placeholder="Current branch" autocomplete="off" spellcheck="false" />
+            </label>
+            <span class="form-hint">The folder must be inside a git repository. The checkout goes to ~/.worktrees/&lt;repo&gt;/&lt;branch&gt;.</span>
+          </div>
+
+          <label class="form-row">
+            <span class="form-label">Name <span class="optional">(optional)</span></span>
+            <input id="f-name" type="text" maxlength="32" placeholder="e.g. reviewer" autocomplete="off" spellcheck="false" />
+            <span class="form-hint">Used for the workspace and the agent. Lowercase letters, digits and dashes.</span>
+          </label>
+
+          <div id="launch-error" class="form-error" role="alert" hidden></div>
+          <div id="launch-progress" class="progress" role="status" aria-live="polite" hidden>
+            <span class="spinner" aria-hidden="true"></span>
+            <span id="launch-progress-text"></span>
+          </div>
+
+          <div class="form-actions">
+            <button id="launch-cancel" class="btn" type="button">Cancel</button>
+            <button id="launch-submit" class="btn primary" type="submit">Start agent</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Conversation with one agent -->
       <section id="conversation" class="conversation" hidden>
         <header class="chat-head">
           <span id="head-dot" class="dot"></span>
@@ -42,18 +102,25 @@
         </header>
 
         <div class="output-wrap">
-          <pre id="output" class="output scroll" tabindex="0" aria-label="Terminal output"></pre>
+          <pre id="output" class="output scroll" tabindex="0" aria-label="Agent output"></pre>
           <button id="jump" class="jump" type="button" hidden>Jump to latest</button>
         </div>
 
         <footer class="composer">
+          <div id="blocked" class="blocked-banner" role="alert" hidden>
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 15 14H1z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 6.2v3.6M8 11.6v.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            <div>
+              <strong>Needs an answer.</strong>
+              <span>The agent is waiting on a question or approval shown above. Choose with ↑ / ↓ and Enter, or type a reply; it is sent as keystrokes followed by Enter.</span>
+            </div>
+          </div>
           <div class="keys" role="group" aria-label="Quick keys">
             <button class="key" type="button" data-key="enter">Enter</button>
             <button class="key" type="button" data-key="esc">Esc</button>
-            <button class="key" type="button" data-key="ctrl+c">Ctrl+C</button>
             <button class="key" type="button" data-key="up" aria-label="Up arrow">↑</button>
             <button class="key" type="button" data-key="down" aria-label="Down arrow">↓</button>
             <button class="key" type="button" data-key="tab">Tab</button>
+            <button class="key" type="button" data-key="ctrl+c">Ctrl+C</button>
             <span id="send-note" class="send-note" role="status" aria-live="polite"></span>
           </div>
           <div class="input-box">
@@ -66,6 +133,30 @@
       </section>
     </main>
   </div>
+
+  <!-- Workspace menu (positioned by view.js) -->
+  <div id="menu" class="menu" role="menu" hidden>
+    <button type="button" role="menuitem" data-act="rename">Rename</button>
+    <button type="button" role="menuitem" data-act="focus">Show in herdr</button>
+    <div class="menu-sep" role="separator"></div>
+    <button type="button" role="menuitem" data-act="close" class="danger">Close workspace…</button>
+    <button type="button" role="menuitem" data-act="remove" class="danger">Remove worktree…</button>
+  </div>
+
+  <!-- In-page dialog for rename / confirm -->
+  <div id="dialog" class="overlay" hidden>
+    <form id="dialog-form" class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" novalidate>
+      <h2 id="dialog-title" class="dialog-title"></h2>
+      <p id="dialog-body" class="dialog-body"></p>
+      <input id="dialog-input" type="text" maxlength="80" autocomplete="off" spellcheck="false" aria-labelledby="dialog-title" hidden />
+      <div id="dialog-error" class="form-error" role="alert" hidden></div>
+      <div class="form-actions">
+        <button id="dialog-cancel" class="btn" type="button">Cancel</button>
+        <button id="dialog-ok" class="btn primary" type="submit">OK</button>
+      </div>
+    </form>
+  </div>
+
   <script src="view.js"></script>
 </body>
 </html>

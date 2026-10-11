@@ -1,0 +1,52 @@
+{
+  "name": "herdr",
+  "description": "Manage herdr coding agents and the workspaces that hold them, on this computer and on SSH machines saved in herdr. Includes a herdr page to follow agents, start new ones (optionally on a new git worktree) and answer them.",
+  "whenToUse": "The user mentions herdr, herdr sessions/workspaces/tabs/panes, or wants to check, read, prompt, start, wait on or coordinate coding agents (Claude, Codex, Grok, Pi, etc.) running in herdr, locally or on a remote herdr machine (e.g. a dev box reachable over SSH).",
+  "tools": {
+    "herdr_machines": {
+      "description": "List where herdr can be reached: \"local\" (this computer) plus every SSH machine saved with `herdr machine add`, with its default remote session. Use the label as the `machine` argument of other herdr tools."
+    },
+    "herdr_sessions": {
+      "description": "List named herdr sessions (persistent servers) on a machine and whether each is running."
+    },
+    "herdr_overview": {
+      "description": "Snapshot one herdr session: workspaces, tabs, panes (cwd, title) and recognized agents with their state (idle / working / blocked / done / unknown). Start here to discover ids. IDs are opaque and scoped to one machine+session; never reuse them across machines."
+    },
+    "herdr_agent_get": {
+      "description": "Show one agent's details and lifecycle state."
+    },
+    "herdr_read": {
+      "description": "Read recent terminal output from a pane or agent (ANSI stripped). Use before deciding what to send, and after a wait returns blocked."
+    },
+    "herdr_prompt_agent": {
+      "description": "Submit a prompt to a coding agent running in herdr and, by default, wait until it settles (idle/done/blocked). Returns the final state; then use herdr_read to get its answer. Rejected with AGENT_BLOCKED if the agent is waiting on an approval/question: read it and ask the user before answering. A timeout does not prove the prompt was not delivered; do not resend blindly."
+    },
+    "herdr_wait_agent": {
+      "description": "Wait until an agent reaches a state. Without `until`, waits for idle, done or blocked."
+    },
+    "herdr_send_keys": {
+      "description": "Send logical key presses (e.g. esc, enter, ctrl+c, up) to an agent or pane, optionally typing literal text first (text needs a pane id). Only answer an agent's approval/question UI when the user told you what to choose."
+    },
+    "herdr_run_command": {
+      "description": "Run a shell command in an existing pane (text + Enter). Optionally wait for a literal substring to appear in its output. The pane should be at a shell prompt, not running an agent."
+    },
+    "herdr_wait_output": {
+      "description": "Wait until a pane's recent output contains a literal substring or matches a Rust regex. Existing output can match immediately."
+    },
+    "herdr_split_pane": {
+      "description": "Split an existing pane to create a new shell pane next to it, without stealing the user's focus. Returns the new pane id in result.pane.pane_id. Split wide panes right, narrow/tall panes down."
+    },
+    "herdr_start_agent": {
+      "description": "Start a supported coding agent (claude, codex, grok, pi, cursor, gemini, opencode, ...) in an existing pane that is at a shell prompt. Usually split a pane first. Returns once the agent is ready; then use herdr_prompt_agent."
+    },
+    "herdr_workspace": {
+      "description": "Manage herdr workspaces, only when the user asked. action create: new workspace in a folder; tab_create: new tab in workspace_id; worktree_create: new git branch + worktree checkout opened as a workspace (cwd or workspace_id must be inside the repo); worktree_open: open an existing worktree by path or branch; rename: relabel workspace_id; worktree_list: list worktrees of a repo. For the four create/open actions, set agent_kind to start that coding agent in the new root pane (returns agent.status ready or blocked; blocked means it is waiting on a prompt such as folder trust: read it with herdr_read and answer only as the user decides). If the agent fails to start, a new plain workspace/tab is closed again; worktrees are kept. Never takes the user's focus unless focus is true."
+    },
+    "herdr_focus": {
+      "description": "Switch the herdr UI focus to a workspace, tab or agent. Only when the user asked to switch."
+    },
+    "herdr_close": {
+      "description": "Close a pane, tab or workspace, stopping the processes in it; or, with kind \"worktree\", remove the git worktree checkout behind a workspace (closes it and deletes the folder; the branch is kept). Only call when the user explicitly asked for that specific item. The user must also approve a confirmation dialog; if they decline (USER_DECLINED), do not retry."
+    }
+  }
+}

@@ -12,25 +12,31 @@ const TOOL_METHODS = {
   herdr_wait_agent: 'agents/wait',
   herdr_send_keys: 'keys',
   herdr_run_command: 'panes/run',
-  herdr_send_text: 'panes/send_text',
   herdr_wait_output: 'panes/wait_output',
   herdr_split_pane: 'panes/split',
   herdr_start_agent: 'agents/start',
-  herdr_create: 'create',
+  herdr_workspace: 'workspace',
   herdr_focus: 'focus',
   herdr_close: 'close',
 };
 
 // Methods allowed from the herdr page (user clicks; no Agent call in flight).
-const PANEL_METHODS = new Set(['machines/list', 'sessions/list', 'overview', 'read', 'agents/get', 'agents/prompt', 'keys', 'panes/run']);
+const PANEL_METHODS = new Set([
+  'machines/list', 'sessions/list', 'overview', 'read', 'agents/get', 'agents/prompt', 'keys',
+  'workspaces/launch', 'workspaces/rename', 'focus', 'close',
+]);
 
 // Long-running methods: keep the tool call alive while the worker waits.
-const LONG_METHODS = new Set(['agents/prompt', 'agents/wait', 'agents/start', 'panes/run', 'panes/wait_output']);
+const LONG_METHODS = new Set([
+  'agents/prompt', 'agents/wait', 'agents/start', 'panes/run', 'panes/wait_output', 'workspace', 'workspaces/launch',
+]);
 
 function nodeTimeouts(method, args) {
   if (!LONG_METHODS.has(method)) return { timeoutMs: 60000 };
   const waitMs = Number(args && args.timeout_ms) || 110000;
-  return { timeoutMs: 120000, maxTotalMs: Math.min(900000, waitMs + 60000) };
+  // Launch = create (a worktree can take up to 90s) + agent startup wait.
+  const extra = method === 'workspace' || method === 'workspaces/launch' ? 150000 : 60000;
+  return { timeoutMs: 120000, maxTotalMs: Math.min(900000, waitMs + extra) };
 }
 
 function errorCodeOf(response) {
@@ -74,15 +80,22 @@ function where(args) {
 async function confirmClose(args) {
   const kind = String(args.kind || '');
   const id = String(args.id || '');
-  const extra = kind === 'workspace' ? ' Every tab, pane and process in it will be stopped.' : kind === 'tab' ? ' Every pane and process in it will be stopped.' : ' Its running process will be stopped.';
+  let body;
+  if (kind === 'worktree') {
+    const forced = args.force === true ? ' Uncommitted changes in it will be lost.' : '';
+    body = `Remove the git worktree of herdr workspace ${id} on ${where(args)}? The workspace is closed, its processes are stopped and the checkout folder is deleted; the git branch is kept.${forced}`;
+  } else {
+    const extra = kind === 'workspace' ? ' Every tab, pane and process in it will be stopped.' : kind === 'tab' ? ' Every pane and process in it will be stopped.' : ' Its running process will be stopped.';
+    body = `Close herdr ${kind} ${id} on ${where(args)}?${extra}`;
+  }
   const r = await cindy.confirm({
-    body: `Close herdr ${kind} ${id} on ${where(args)}?${extra}`.slice(0, 300),
-    confirmText: 'Close',
+    body: body.slice(0, 300),
+    confirmText: kind === 'worktree' ? 'Remove' : 'Close',
     cancelText: 'Keep it',
     danger: true,
   });
   if (!r.ok) return { ok: false, code: 'CONFIRM_UNAVAILABLE', message: `Could not ask for confirmation (${r.errorCode || 'unknown'}). Nothing was closed; ask the user to try again.` };
-  if (!r.confirmed) return { ok: false, code: 'USER_DECLINED', message: 'The user declined to close it. Nothing was closed; do not ask again unless the user requests it.' };
+  if (!r.confirmed) return { ok: false, code: 'USER_DECLINED', message: 'The user declined. Nothing was closed or removed; do not ask again unless the user requests it.' };
   return { ok: true };
 }
 
@@ -151,7 +164,8 @@ panelChannel.onmessage = async function (event) {
       const params = { ...(data.params || {}) };
       // The page polls output itself; never block on agent completion or pane output here.
       if (data.method === 'agents/prompt') params.wait = false;
-      if (data.method === 'panes/run') delete params.wait_for;
+      // The page confirms close/remove in-page; it never forces a worktree removal.
+      if (data.method === 'close') delete params.force;
       const r = await callWorker(data.method, params, null);
       out = r.ok
         ? { type: 'response', reqId: data.reqId, ok: true, result: r.result }

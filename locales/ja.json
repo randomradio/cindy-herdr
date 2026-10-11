@@ -1,0 +1,52 @@
+{
+  "name": "herdr",
+  "description": "このコンピューターおよび herdr に保存された SSH マシン上の herdr コーディングエージェントと、それを収めるワークスペースを管理します。herdr ページでエージェントの確認、新規起動（新しい git worktree 上も可）、応答ができます。",
+  "whenToUse": "ユーザーが herdr、herdr のセッション / ワークスペース / タブ / ペインに言及したとき、または herdr で動作するコーディングエージェント（Claude、Codex、Grok、Pi など）を確認・読み取り・プロンプト送信・起動・待機・連携したいとき。ローカルでも、リモートの herdr マシン（例：SSH で接続する開発機）でも対象です。",
+  "tools": {
+    "herdr_machines": {
+      "description": "herdr に接続できる場所を一覧表示します：\"local\"（このコンピューター）と、`herdr machine add` で保存されたすべての SSH マシンおよびその既定のリモートセッション。label を他の herdr ツールの `machine` 引数に使います。"
+    },
+    "herdr_sessions": {
+      "description": "マシン上の名前付き herdr セッション（常駐サーバー）と、それぞれが実行中かどうかを一覧表示します。"
+    },
+    "herdr_overview": {
+      "description": "1 つの herdr セッションのスナップショットを取得します：ワークスペース、タブ、ペイン（作業ディレクトリ、タイトル）、認識されたエージェントとその状態（idle / working / blocked / done / unknown）。ID を調べるときはここから始めます。ID は不透明で、1 台のマシン + 1 つのセッション内でのみ有効です。マシン間で再利用しないでください。"
+    },
+    "herdr_agent_get": {
+      "description": "1 つのエージェントの詳細とライフサイクル状態を表示します。"
+    },
+    "herdr_read": {
+      "description": "ペインまたはエージェントの最近のターミナル出力を読み取ります（ANSI 除去済み）。送信内容を決める前、および待機結果が blocked になった後に使います。"
+    },
+    "herdr_prompt_agent": {
+      "description": "herdr で動作するコーディングエージェントにプロンプトを送信し、既定では落ち着く（idle/done/blocked）まで待ちます。最終状態を返すので、回答は herdr_read で取得します。エージェントが承認や質問を待っている場合は AGENT_BLOCKED で拒否されます：内容を読み、ユーザーに確認してから回答してください。タイムアウトは未送信の証明にはならないため、むやみに再送しないでください。"
+    },
+    "herdr_wait_agent": {
+      "description": "エージェントが特定の状態になるまで待ちます。`until` を省略すると idle、done、blocked のいずれかを待ちます。"
+    },
+    "herdr_send_keys": {
+      "description": "エージェントまたはペインに論理キー（esc、enter、ctrl+c、up など）を送信します。先にテキストをそのまま入力することもできます（text にはペイン ID が必要）。エージェントの承認 / 質問 UI には、ユーザーが選択内容を指示した場合のみ応答してください。"
+    },
+    "herdr_run_command": {
+      "description": "既存のペインでシェルコマンドを実行します（テキスト + Enter）。出力に特定の文字列が現れるまで待つこともできます。ペインはエージェント実行中ではなく、シェルプロンプトの状態である必要があります。"
+    },
+    "herdr_wait_output": {
+      "description": "ペインの最近の出力に特定の文字列が含まれる、または Rust 正規表現に一致するまで待ちます。既存の出力がすぐに一致することもあります。"
+    },
+    "herdr_split_pane": {
+      "description": "既存のペインを分割し、隣に新しいシェルペインを作成します。ユーザーのフォーカスは奪いません。新しいペイン ID は result.pane.pane_id に返されます。横長のペインは右へ、縦長のペインは下へ分割します。"
+    },
+    "herdr_start_agent": {
+      "description": "シェルプロンプト状態の既存ペインで、対応するコーディングエージェント（claude、codex、grok、pi、cursor、gemini、opencode など）を起動します。通常は先にペインを分割します。エージェントの準備ができると戻るので、その後 herdr_prompt_agent を使います。"
+    },
+    "herdr_workspace": {
+      "description": "herdr のワークスペースを管理します。ユーザーが求めた場合のみ使います。action：create はフォルダーに新しいワークスペースを作成、tab_create は workspace_id に新しいタブを作成、worktree_create は新しい git ブランチと worktree チェックアウトを作成してワークスペースとして開く（cwd または workspace_id はリポジトリ内であること）、worktree_open は既存の worktree をパスまたはブランチで開く、rename は workspace_id の名前を変更、worktree_list はリポジトリの worktree を一覧表示します。4 つの作成/オープン操作では agent_kind を指定すると新しいルートペインでそのコーディングエージェントを起動します（agent.status は ready または blocked。blocked はフォルダー信頼などの確認待ちを意味します。herdr_read で読み、ユーザーの判断どおりにのみ応答してください）。エージェントの起動に失敗した場合、新しく作った通常のワークスペース/タブは閉じられ、worktree は残ります。focus が true でない限りユーザーのフォーカスは奪いません。"
+    },
+    "herdr_focus": {
+      "description": "herdr の UI フォーカスをワークスペース、タブ、またはエージェントに切り替えます。ユーザーが切り替えを求めた場合のみ使います。"
+    },
+    "herdr_close": {
+      "description": "ペイン、タブ、またはワークスペースを閉じ、その中のプロセスを停止します。kind が \"worktree\" の場合は、ワークスペースの元になっている git worktree チェックアウトを削除します（ワークスペースを閉じてフォルダーを削除。ブランチは残ります）。ユーザーがその項目について明示的に求めた場合のみ呼び出してください。ユーザーは確認ダイアログでも承認する必要があります。拒否された場合（USER_DECLINED）は再試行しないでください。"
+    }
+  }
+}
