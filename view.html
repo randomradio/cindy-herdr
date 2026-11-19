@@ -10,6 +10,13 @@
 <body>
   <div class="layout">
     <aside class="sidebar">
+      <div class="sidebar-head">
+        <div class="brand"><img src="assets/icon.png" width="24" height="24" alt="" /><span>herdr</span></div>
+        <button id="new-agent" class="new-btn" type="button">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          New agent
+        </button>
+      </div>
       <div class="filters">
         <label class="field">
           <span class="field-label">Machine</span>
@@ -23,18 +30,13 @@
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.61-3.89M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
       </div>
-      <div class="new-wrap">
-        <button id="new-agent" class="new-btn" type="button">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-          New agent
-        </button>
-      </div>
-      <div id="status" class="status" role="status" aria-live="polite"></div>
       <nav id="list" class="list scroll" aria-label="herdr agents"></nav>
+      <div id="status" class="status" role="status" aria-live="polite"></div>
     </aside>
 
     <main class="chat">
       <div id="placeholder" class="placeholder">
+        <img class="placeholder-logo" src="assets/icon.png" width="44" height="44" alt="" />
         <p class="placeholder-title">Select an agent</p>
         <p class="placeholder-body">Pick an agent on the left to read its conversation or open its terminal, or start a new one.</p>
       </div>
@@ -96,14 +98,15 @@
       <section id="conversation" class="conversation" hidden>
         <header class="chat-head">
           <span id="head-dot" class="dot"></span>
+          <svg class="agent-icon head-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v14M4.5 6.5 15.5 13.5M4.5 13.5 15.5 6.5"/></svg>
           <div class="head-main">
             <div id="head-title" class="head-title"></div>
             <div id="head-meta" class="head-meta"></div>
           </div>
           <span id="head-status" class="badge"></span>
           <div class="view-switch" role="group" aria-label="Agent view">
-            <button id="show-chat" type="button" aria-pressed="false">Chat</button>
-            <button id="show-terminal" type="button" aria-pressed="true">Terminal</button>
+            <button id="show-chat" type="button" aria-pressed="false"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4.5h14v9H8l-4 3v-3H3z"/></svg>Chat</button>
+            <button id="show-terminal" type="button" aria-pressed="true"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2"/><path d="m5.5 7 3 3-3 3M10 13h4"/></svg>Terminal</button>
           </div>
         </header>
 
@@ -121,11 +124,27 @@
             <button id="chat-newer" type="button" class="chat-older" hidden>Jump to latest messages</button>
             <div id="chat-events"></div>
           </div>
+          <div class="composer">
+          <div id="slash-menu" class="slash-menu" role="group" aria-label="Agent slash commands" hidden>
+            <div class="slash-menu-head">
+              <span>Commands</span>
+              <button id="slash-full-terminal" type="button" aria-label="Open full terminal" title="Open full terminal"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11 3h6v6M17 3l-8 8M8 4H4v12h12v-4"/></svg></button>
+              <button id="slash-dismiss" type="button" aria-label="Close agent commands" title="Close agent commands"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg></button>
+            </div>
+            <div id="slash-options" class="slash-options scroll" role="listbox" aria-label="Agent commands"></div>
+            <div id="slash-preview" class="slash-preview" role="status"></div>
+            <div class="slash-menu-foot"><span>↑↓ Navigate</span><span>Tab Complete</span><span>Enter Run</span><span>Esc Close</span></div>
+          </div>
           <form id="chat-form" class="chat-form">
-            <textarea id="chat-input" rows="2" aria-label="Message the agent" placeholder="Message the agent · Enter to send, Shift+Enter for a new line"></textarea>
-            <button id="chat-send" type="submit" aria-label="Send message">Send</button>
+            <textarea id="chat-input" rows="2" aria-controls="slash-options" aria-autocomplete="list" aria-expanded="false" aria-label="Message the agent" placeholder="Message the agent…" title="Enter to send, Shift+Enter for a new line"></textarea>
+            <div class="composer-tools">
+              <button id="chat-slash" type="button" aria-label="Open agent slash commands" title="Open this agent's native command menu">/</button>
+              <span class="composer-hint">Enter to send · Shift+Enter for a new line</span>
+              <button id="chat-send" type="submit" aria-label="Send message" title="Send message"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15V5m-5 5 5-5 5 5"/></svg></button>
+            </div>
           </form>
           <div id="chat-note" role="status" aria-live="polite" class="chat-note"></div>
+          </div>
         </div>
 
         <div id="terminal-panel" class="terminal-panel">
@@ -175,6 +194,7 @@
 
   <script src="vendor/xterm/xterm.js"></script>
   <script src="chat-view.js"></script>
+  <script src="slash-controller.js"></script>
   <script src="view.js"></script>
 </body>
 </html>

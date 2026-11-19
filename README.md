@@ -21,7 +21,13 @@ on this computer and on SSH machines saved in herdr.
   recent chat locally, so reopening shows that view immediately, then checks
   the live transcript. Saved chat is read-only until that identity is verified.
   Use Chat / Terminal to type, paste or answer approval prompts in the
-  ANSI-colored xterm mirror.
+  ANSI-colored xterm mirror. Typing `/` in a verified Chat composer opens the
+  selected agent's own commands as browser options above the composer, without
+  a static command catalog or loading the full Terminal. Typing filters them;
+  arrows move the agent's selection, Tab completes the selected command back
+  into the composer, Enter runs it, and Esc dismisses only that interaction.
+  Clicking an option completes it without running it. Open full terminal
+  remains available when the agent shows a dialog Cindy cannot recognize.
 - **New agent.** Choose an agent type, a folder and an optional name, and
   optionally work on a new git branch (a worktree under
   `~/.worktrees/<repo>/<branch>`, with an optional base). The page creates the
@@ -94,6 +100,17 @@ In Cindy, ask: *"install the plugin from `<path to this folder>`"* (Cindy Forge
 packs and installs it), or zip the folder contents into a `.cindy` archive and
 import it from Cindy's Plugins page.
 
+## Maintenance
+
+The project-local `herdr-maintenance` Skill and
+[maintenance workflow](docs/maintenance-workflow.md) describe an evidence-led
+observe → reproduce → fix → test → review loop. No recurring task is configured.
+
 ## License
 
 Apache-2.0
+
+The plugin uses the unmodified Herdr ram logo from
+[herdrdev/herdr](https://github.com/herdrdev/herdr), revision
+e7e3dfa60e359404def46503dd105c165d02a561. Its Apache-2.0 license is included
+in [assets/herdr-LICENSE.txt](assets/herdr-LICENSE.txt).

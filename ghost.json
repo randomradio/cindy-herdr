@@ -1,8 +1,8 @@
 {
   "schemaVersion": 3,
   "minCindyVersion": "0.1.97",
-  "id": "herdr",
-  "name": "herdr",
+  "id": "herdr-bridge",
+  "name": "herdr for Cindy",
   "description": "Manage herdr coding agents and the workspaces that hold them, on this computer and on SSH machines saved in herdr. Includes a herdr page to follow agents, start new ones (optionally on a new git worktree) and answer them.",
   "whenToUse": "The user mentions herdr, herdr sessions/workspaces/tabs/panes, or wants to check, read, prompt, start, wait on or coordinate coding agents (Claude, Codex, Grok, Pi, etc.) running in herdr, locally or on a remote herdr machine (e.g. a dev box reachable over SSH).",
   "locales": {
@@ -11,10 +11,10 @@
     "ja": "locales/ja.json",
     "ko": "locales/ko.json"
   },
-  "version": "1.3.2",
+  "version": "1.4.4",
   "entry": "main.js",
   "icon": "assets/icon.png",
-  "command": "herdr",
+  "command": "herdr-bridge",
   "confirm": true,
   "mainView": {
     "title": "herdr",

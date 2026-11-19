@@ -32,6 +32,11 @@
   const chatForm = $('chat-form');
   const chatInput = $('chat-input');
   const chatSend = $('chat-send');
+  const chatSlash = $('chat-slash');
+  const slashMenu = $('slash-menu');
+  const slashPreview = $('slash-preview');
+  const slashFullTerminal = $('slash-full-terminal');
+  const slashDismiss = $('slash-dismiss');
   const chatNote = $('chat-note');
   const chatState = $('chat-state');
   const chatStateTitle = $('chat-state-title');
@@ -292,6 +297,9 @@
     for (const ws of shown) {
       const section = el('section', 'ws');
       const head = el('div', 'ws-head');
+      const folderIcon = el('span', 'ws-icon');
+      folderIcon.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 5.5A1.5 1.5 0 0 1 4 4h3l2 2h7a1.5 1.5 0 0 1 1.5 1.5v7A1.5 1.5 0 0 1 16 16H4a1.5 1.5 0 0 1-1.5-1.5z"/></svg>';
+      head.appendChild(folderIcon);
       const name = el('span', 'ws-name', ws.label || ws.workspace_id);
       name.title = `${ws.label || ''} (${ws.workspace_id})`;
       head.appendChild(name);
@@ -318,16 +326,23 @@
         row.type = 'button';
         row.dataset.pane = p.pane_id;
         const dot = el('span', `dot ${statusClass(p.status)}`);
+        const agentIcon = el('span', 'agent-icon');
+        agentIcon.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v14M4.5 6.5 15.5 13.5M4.5 13.5 15.5 6.5"/></svg>';
         const main = el('span', 'row-main');
         const title = el('span', 'row-title');
-        title.appendChild(el('span', 'row-name', p.agent_name || kindLabel(p.agent)));
-        if (p.agent_name) title.appendChild(el('span', 'row-kind', kindLabel(p.agent)));
-        const meta = el('span', 'row-meta', p.title && p.title !== p.agent ? p.title : shortPath(p.cwd));
+        const conversationTitle = p.title && p.title !== p.agent ? p.title : p.agent_name || kindLabel(p.agent);
+        title.appendChild(el('span', 'row-name', conversationTitle));
+        title.title = conversationTitle;
+        const meta = el('span', 'row-meta', [kindLabel(p.agent), p.agent_name || shortPath(p.cwd)].filter(Boolean).join(' · '));
         meta.title = p.cwd || '';
         main.append(title, meta);
-        row.append(dot, main);
+        row.append(agentIcon, main);
         const st = statusText(p.status);
-        if (st) row.appendChild(el('span', `badge ${statusClass(p.status)}`, st));
+        const status = el('span', `row-status ${statusClass(p.status)}`);
+        status.setAttribute('aria-label', st || p.status || 'Unknown status');
+        status.title = st || p.status || 'Unknown status';
+        status.append(dot, el('span', 'row-status-label', st));
+        row.appendChild(status);
         row.addEventListener('click', () => selectPane(p));
         section.appendChild(row);
       }
@@ -521,10 +536,12 @@
   }
   function updateChatComposer() {
     const blocked = selected?.status === 'blocked';
-    chatInput.disabled = !chatReady || !chatVerified || blocked || chatSending;
-    chatSend.disabled = chatInput.disabled;
+    chatInput.disabled = !chatReady || !chatVerified || blocked || chatSending || slashController.locked;
+    chatSend.disabled = chatInput.disabled || slashController.active;
+    chatSlash.disabled = chatInput.disabled || slashController.active;
     chatInput.placeholder = blocked ? 'Answer this question in Terminal' : !chatReady
       ? 'Conversation history is not connected yet'
+      : slashController.active ? 'Type a command · Tab to complete · Enter to run'
       : 'Message the agent · Enter to send, Shift+Enter for a new line';
   }
   function historyState(title, reason) {
@@ -535,6 +552,7 @@
     updateChatComposer();
   }
   function switchMode(mode) {
+    if (mode !== 'chat') slashController.reset();
     viewMode = mode;
     chatPanel.hidden = mode !== 'chat';
     terminalPanel.hidden = mode !== 'terminal';
@@ -552,6 +570,7 @@
     }
   }
   function stopChat() {
+    slashController.reset();
     chatGeneration++;
     clearTimeout(chatTimer);
     chatIdentity = null;
@@ -717,14 +736,30 @@
   });
   chatOlder.addEventListener('click', () => { if (chatOlderAvailable) pollChat(true); });
   chatNewer.addEventListener('click', () => jumpToLatestChat());
-  chatInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); chatForm.requestSubmit(); }
+  const slashController = new window.HerdrSlashController({
+    input: chatInput, menu: slashMenu, list: $('slash-options'), preview: slashPreview,
+    dismiss: slashDismiss, fullTerminal: slashFullTerminal, request,
+    capture: () => {
+      if (!selected || !chatReady || !chatVerified || !chatIdentity || chatSending) return null;
+      if (!['idle', 'done'].includes(selected.status)) {
+        chatStatus('Wait for the agent to be ready before opening commands.', true); return null;
+      }
+      return { ctx: panelContext(), generation: chatGeneration,
+        params: { ...target(), target: selected.pane_id, identity: chatIdentity } };
+    },
+    valid: t => t.ctx === panelContext() && t.generation === chatGeneration && t.params.target === selected?.pane_id && viewMode === 'chat' && !conversation.hidden,
+    status: chatStatus, change: updateChatComposer, terminal: () => switchMode('terminal'),
+  });
+  chatSlash.addEventListener('click', () => slashController.open(chatInput.value.startsWith('/') ? chatInput.value : '/'));
+  chatInput.addEventListener('keydown', e => {
+    if (!slashController.active && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); chatForm.requestSubmit(); }
   });
   chatForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    if (!selected || !chatReady || !chatVerified || !chatIdentity || selected.status === 'blocked' || chatSending) return;
+    if (!selected || !chatReady || !chatVerified || !chatIdentity || selected.status === 'blocked' || chatSending || slashController.active) return;
     const value = chatInput.value.trim();
     if (!value) return;
+    if (value.startsWith('/')) { await slashController.open(value); return; }
     chatSending = true;
     updateChatComposer();
     chatStatus('Sending…');
@@ -957,9 +992,10 @@
     if (!selected) return;
     const blocked = selected.status === 'blocked';
     headDot.className = `dot ${statusClass(selected.status)}`;
-    headTitle.textContent = selected.agent_name ? `${selected.agent_name} · ${kindLabel(selected.agent)}` : kindLabel(selected.agent);
+    headTitle.textContent = selected.title && selected.title !== selected.agent ? selected.title : selected.agent_name || kindLabel(selected.agent);
+    headTitle.title = headTitle.textContent;
     const ws = wsOf(selected);
-    headMeta.textContent = [machineName(), sessionSel.value || 'default', ws ? ws.label || ws.workspace_id : selected.workspace_id, shortPath(selected.cwd)]
+    headMeta.textContent = [kindLabel(selected.agent), selected.agent_name, machineName(), sessionSel.value || 'default', ws ? ws.label || ws.workspace_id : selected.workspace_id, shortPath(selected.cwd)]
       .filter(Boolean)
       .join(' · ');
     headMeta.title = selected.cwd || '';

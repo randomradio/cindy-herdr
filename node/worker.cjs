@@ -10,14 +10,18 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const transcripts = require('./transcript.cjs');
+const nativeMenu = require('./native-menu.cjs');
 const { assertRemotePromptBody } = require('./prompt-guard.cjs');
 // The plugin is installed locally, so send a bundled one-shot helper to Node
 // on the saved SSH machine. The remote machine needs Node but no installed files.
 const REMOTE_HISTORY_SCRIPT = (() => {
   const library = fs.readFileSync(path.join(__dirname, 'transcript.cjs'), 'utf8');
+  const menu = fs.readFileSync(path.join(__dirname, 'native-menu.cjs'), 'utf8');
   const helper = fs.readFileSync(path.join(__dirname, 'remote-history.cjs'), 'utf8')
-    .replace("const transcripts = require('./transcript.cjs');", '');
-  return `globalThis.__HERDR_REMOTE_HELPER__ = true;\nconst transcripts = (() => { const module = { exports: {} }; (function(module, require) { ${library}\n })(module, require); return module.exports; })();\n${helper}`;
+    .replace("const transcripts = require('./transcript.cjs');", '')
+    .replace("const nativeMenu = require('./native-menu.cjs');", '');
+  const bundle = (name, source) => `const ${name} = (() => { const module = { exports: {} }; (function(module, require) { ${source}\n })(module, require); return module.exports; })();`;
+  return `globalThis.__HERDR_REMOTE_HELPER__ = true;\n${bundle('transcripts', library)}\n${bundle('nativeMenu', menu)}\n${helper}`;
 })();
 
 const MAX_OUTPUT = 4 * 1024 * 1024;
@@ -564,6 +568,40 @@ const METHODS = {
     return { available: true, agent: resolved.pane.agent, ...data };
   },
 
+  // Verify the transcript, apply one ordered operation and read the native
+  // menu within a single remote request (no static cross-agent command list).
+  async 'chat/commands'(p) {
+    const target = str(req(p, 'target'), ID_RE, 'target');
+    if (!target.includes(':') || typeof p.identity !== 'string' || !p.identity) throw new UserError('INVALID_ARGS', 'Pane and transcript identity are required.');
+    try { nativeMenu.validate(p); } catch (err) { throw new UserError('INVALID_ARGS', err.message); }
+    const machine = await resolveMachine(p.machine);
+    if (machine.kind === 'ssh') {
+      const session = str(p.session || machine.defaultSession || 'default', SESSION_RE, 'session');
+      const payload = JSON.stringify({ action: 'menu', session, target, identity: p.identity,
+        operation: p.operation, text: p.text, expectedText: p.expectedText, key: p.key, label: p.label, draft: p.draft });
+      const result = await runSshCommand(machine.target, REMOTE_PATH_PREFIX + 'node -e ' + shQuote(REMOTE_HISTORY_SCRIPT) + ' -- ' + shQuote(payload), 20000);
+      if (result.code !== 0) throw new UserError('HERDR_FAILED', 'Command menu request failed. Check Terminal before retrying input.');
+      return assertRemotePromptBody(parseRemoteHelperStdout(result.stdout));
+    }
+    const resolved = await resolveChatFile(p, target);
+    if (!resolved.available) throw new UserError('UNAVAILABLE', resolved.reason);
+    if (transcripts.fileIdentity(resolved.file) !== p.identity) throw new UserError('SESSION_MISMATCH', 'The agent session changed. Reopen Chat before using commands.');
+    if (p.operation === 'open' && !['idle', 'done'].includes(resolved.pane.agent_status)) throw new UserError('AGENT_NOT_READY', 'Wait for the agent to be ready before opening commands.');
+    return nativeMenu.interact({ ...p, target }, resolved.pane.agent, async (args, raw) => {
+      const r = await herdr(p, args, { raw: !!raw, timeoutMs: 10000 });
+      return raw ? r.text : r.result;
+    });
+  },
+
+  // Opening the agent's own menu types a slash prefix without pressing Enter.
+  async 'chat/slash'(p) {
+    const prefix = p.text === undefined ? '/' : p.text;
+    if (typeof prefix !== 'string' || !/^\/[^\r\n\x00-\x1f\x7f]{0,1999}$/.test(prefix)) {
+      throw new UserError('INVALID_ARGS', 'A slash command must be one line starting with /.');
+    }
+    return METHODS['chat/prompt']({ ...p, text: prefix, nativeSlash: true });
+  },
+
   // Page send: require the live transcript identity to match before delivering a prompt.
   async 'chat/prompt'(p) {
     const target = str(req(p, 'target'), ID_RE, 'target');
@@ -575,7 +613,7 @@ const METHODS = {
     if (machine.kind === 'ssh') {
       const session = p.session || machine.defaultSession || 'default';
       str(session, SESSION_RE, 'session');
-      const payload = JSON.stringify({ action: 'prompt', target, session, identity: expected, text });
+      const payload = JSON.stringify({ action: p.nativeSlash === true ? 'slash' : 'prompt', target, session, identity: expected, text });
       const command = REMOTE_PATH_PREFIX + 'node -e ' + shQuote(REMOTE_HISTORY_SCRIPT) + ' -- ' + shQuote(payload);
       const result = await runSshCommand(machine.target, command, 120000);
       if (result.code !== 0) throw new UserError('HERDR_FAILED', 'Could not deliver the message on the remote machine.');
@@ -589,6 +627,14 @@ const METHODS = {
     if (!resolved.available) throw new UserError('UNAVAILABLE', resolved.reason || 'Chat is unavailable.');
     if (transcripts.fileIdentity(resolved.file) !== expected) {
       throw new UserError('SESSION_MISMATCH', 'Live transcript identity does not match the conversation shown.');
+    }
+    if (p.nativeSlash === true) {
+      if (!['idle', 'done'].includes(resolved.pane.agent_status)) {
+        throw new UserError('AGENT_NOT_READY', 'Open Terminal to interact with this agent while it is working or waiting for an answer.');
+      }
+      await herdr(p, ['pane', 'send-text', target, text]);
+      const screen = await METHODS['chat/menu'](p);
+      return { ok: true, native_menu: true, ...screen };
     }
     return METHODS['agents/prompt']({ ...p, target, text, wait: false });
   },
@@ -611,6 +657,17 @@ const METHODS = {
       cols: Math.min(500, Math.max(20, cols)),
       rows: Math.min(300, Math.max(1, lines.length)),
     };
+  },
+
+  // Compact native command preview: only visible rows, no transcript or full terminal.
+  async 'chat/menu'(p) {
+    const target = str(req(p, 'target'), ID_RE, 'target');
+    if (!target.includes(':')) throw new UserError('INVALID_ARGS', 'target must be a pane id.');
+    const r = await herdr(p, ['pane', 'read', target, '--source', 'visible', '--lines', '24'], { raw: true, timeoutMs: 10000 });
+    const lines = stripAnsi(r.text).replace(/\r/g, '').split('\n');
+    const text = lines.slice(-16).join('\n').slice(-4000);
+    const hash = fnv1a(text);
+    return p.since === hash ? { unchanged: true, hash } : { hash, text };
   },
 
   // Raw terminal input from xterm (keystrokes, escape sequences, pastes), written as-is to the pane.

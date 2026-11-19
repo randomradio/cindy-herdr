@@ -25,7 +25,7 @@ const PANEL_METHODS = new Set([
   'machines/list', 'sessions/list', 'overview', 'read', 'agents/get', 'keys',
   'workspaces/launch', 'workspaces/rename', 'focus', 'close',
   // Live terminal: the page mirrors one pane in xterm and types into it.
-  'term/screen', 'term/input', 'chat/history', 'chat/prompt',
+  'term/screen', 'term/input', 'chat/history', 'chat/prompt', 'chat/commands',
 ]);
 
 // Long-running methods: keep the tool call alive while the worker waits.
@@ -34,7 +34,7 @@ const LONG_METHODS = new Set([
 ]);
 
 function nodeTimeouts(method, args) {
-  if (method === 'term/screen' || method === 'term/input') return { timeoutMs: 15000 };
+  if (method === 'term/screen' || method === 'term/input' || method === 'chat/menu') return { timeoutMs: 15000 };
   if (!LONG_METHODS.has(method)) return { timeoutMs: 60000 };
   const waitMs = Number(args && args.timeout_ms) || 110000;
   // Launch = create (a worktree can take up to 90s) + agent startup wait.
