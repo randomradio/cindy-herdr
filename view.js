@@ -536,12 +536,12 @@
   }
   function updateChatComposer() {
     const blocked = selected?.status === 'blocked';
-    chatInput.disabled = !chatReady || !chatVerified || blocked || chatSending || slashController.locked;
+    chatInput.disabled = !chatReady || !chatVerified || blocked || chatSending || slashController.inputLocked;
     chatSend.disabled = chatInput.disabled || slashController.active;
     chatSlash.disabled = chatInput.disabled || slashController.active;
     chatInput.placeholder = blocked ? 'Answer this question in Terminal' : !chatReady
       ? 'Conversation history is not connected yet'
-      : slashController.active ? 'Type a command · Tab to complete · Enter to run'
+      : slashController.active ? (slashController.locked ? 'Edit your draft · Open Terminal to continue' : 'Type a command · Tab to complete · Enter to confirm')
       : 'Message the agent · Enter to send, Shift+Enter for a new line';
   }
   function historyState(title, reason) {
@@ -552,7 +552,7 @@
     updateChatComposer();
   }
   function switchMode(mode) {
-    if (mode !== 'chat') slashController.reset();
+    if (mode !== 'chat') slashController.reset(true);
     viewMode = mode;
     chatPanel.hidden = mode !== 'chat';
     terminalPanel.hidden = mode !== 'terminal';

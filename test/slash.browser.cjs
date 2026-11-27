@@ -28,18 +28,22 @@ const root = path.resolve(__dirname, '..');
           if (m.method === 'chat/history') result = { available: true, identity: 'live-id', next: 10, previous: 0, rangeStart: 0, rangeEnd: 10, events: m.params.after ? [] : [{ id: 'e1', type: 'text', role: 'assistant', text: 'Ready', byte: 0, endByte: 10 }] };
           if (m.method === 'chat/commands') {
             ok = !window.rejectMenu;
+            let resumed = false;
             if (ok) {
               const p = m.params;
-              if (p.operation === 'open') nativeInput = p.text;
+              if (p.operation === 'open') {
+                resumed = (p.text === '/' && /^\/\S*$/.test(nativeInput)) || nativeInput === p.text;
+                if (!resumed && nativeInput) ok = false;
+                if (!resumed && ok) nativeInput = p.text;
+              }
               if (p.operation === 'edit') { if (p.expectedText !== nativeInput) throw Error('stale input'); nativeInput = p.text; }
               if (p.operation === 'key' && p.key === 'down') highlight = 1;
               if (p.operation === 'key' && p.key === 'tab') nativeInput = highlight ? '/help ' : '/model ';
               if (p.operation === 'select') nativeInput = p.label + ' ';
               if (p.operation === 'key' && p.key === 'enter') nativeInput = '';
-              if (p.operation === 'cancel') nativeInput = '';
             }
             const filtering = nativeInput === '/' || nativeInput === '/model' || nativeInput === '/help';
-            result = { ok, input: nativeInput, recognized: true, selected: filtering ? highlight : -1, options: filtering ? [{ label: '/model', description: 'Choose model' }, { label: '/help', description: 'Agent help' }] : [] };
+            result = { ok, resumed, input: nativeInput, recognized: true, selected: filtering ? highlight : -1, options: filtering ? [{ label: '/model', description: 'Choose model' }, { label: '/help', description: 'Agent help' }] : [] };
           }
           setTimeout(() => this.onmessage({ data: { type: 'response', reqId: m.reqId, ok, result, message: ok ? undefined : 'SESSION_MISMATCH: Agent changed.' } }), 30);
         }
@@ -110,13 +114,60 @@ const root = path.resolve(__dirname, '..');
     await page.waitForFunction(() => document.querySelector('#slash-menu').hidden);
     assert.equal(await page.locator('#chat-input').inputValue(), '');
     assert.equal(await page.evaluate(() => calls.some(c => ['chat/prompt', 'term/input', 'term/screen'].includes(c.method))), false);
+    await page.evaluate(() => { window.nativeInput = '/models'; });
+    await page.locator('#chat-input').fill('/');
+    await page.waitForFunction(() => document.querySelector('#chat-input').value === '/models' && !document.querySelector('#chat-input').disabled);
+    assert.match(await page.locator('#chat-note').textContent(), /Resumed/);
+    await page.locator('#chat-input').fill('/model');
+    await page.waitForFunction(() => window.nativeInput === '/model' && document.querySelectorAll('.slash-option').length === 2);
+    const beforeResumeClose = await page.evaluate(() => calls.length);
+    await page.locator('#slash-dismiss').click();
+    await page.waitForFunction(() => document.querySelector('#slash-menu').hidden);
+    assert.equal(await page.locator('#slash-menu').isVisible(), false);
+    assert.equal(await page.evaluate(() => window.nativeInput), '/model');
+    assert.deepEqual(await page.evaluate(start => calls.slice(start).filter(call => call.method === 'chat/commands' && call.params.operation !== 'read').map(call => call.params.operation), beforeResumeClose), ['cancel']);
+    await page.locator('#chat-input').fill('/');
+    await page.waitForFunction(() => document.querySelector('#chat-input').value === '/model' && !document.querySelector('#chat-input').disabled);
+    await page.evaluate(() => {
+      const input = document.querySelector('#chat-input');
+      input.value = '/model unsent';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      document.querySelector('#slash-dismiss').click();
+    });
+    await page.waitForFunction(() => document.querySelector('#slash-menu').hidden);
+    assert.equal(await page.locator('#chat-input').inputValue(), '/model unsent');
+    assert.equal(await page.evaluate(() => window.nativeInput), '/model unsent');
+    await page.locator('#chat-input').fill('/review important unsent instructions');
+    await page.waitForFunction(() => document.querySelector('#chat-note').textContent.includes('Agent changed'));
+    await page.locator('#slash-dismiss').click();
+    assert.equal(await page.locator('#chat-input').inputValue(), '/review important unsent instructions');
+    assert.equal(await page.evaluate(() => window.nativeInput), '/model unsent');
     await page.evaluate(() => { window.rejectMenu = true; });
     await page.locator('#chat-input').fill('/');
     await page.waitForFunction(() => document.querySelector('#chat-note').textContent.includes('Agent changed'));
     assert.equal(await page.locator('#chat-input').inputValue(), '/');
+    const beforeFailedClose = await page.evaluate(() => calls.length);
+    assert.equal(await page.locator('#chat-input').isEnabled(), true);
+    await page.locator('#chat-input').pressSequentially('model keep typing');
+    await page.locator('#chat-input').press('Enter');
+    await page.waitForTimeout(150);
+    assert.equal(await page.locator('#chat-input').inputValue(), '/model keep typing');
+    assert.equal(await page.locator('#chat-send').isEnabled(), false);
+    assert.equal(await page.evaluate(start => calls.slice(start).some(call => call.method === 'chat/commands'), beforeFailedClose), false);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#slash-menu').isVisible(), false);
+    assert.equal(await page.locator('#chat-input').isEnabled(), true);
+    assert.equal(await page.locator('#chat-input').inputValue(), '/model keep typing');
+    assert.equal(await page.evaluate(() => window.nativeInput), '/model unsent');
+    assert.equal(await page.evaluate(start => calls.slice(start).some(call => call.method === 'chat/commands'), beforeFailedClose), false);
+    await page.locator('#chat-input').fill('/');
+    await page.waitForFunction(() => document.querySelector('#chat-note').textContent.includes('Agent changed'));
+    await page.locator('#slash-dismiss').click();
+    assert.equal(await page.locator('#slash-menu').isVisible(), false);
+    assert.equal(await page.locator('#chat-input').isEnabled(), true);
     const mutations = await page.evaluate(() => calls.filter(c => c.method === 'chat/commands' && c.params.operation !== 'read'));
     assert(mutations.every(m => m.params.identity === 'live-id'));
     assert.deepEqual(errors, []);
-    console.log('PASS: native browser options, selection, Tab updates full draft, middle editing, IME, Enter once, guarded failures');
+    console.log('PASS: native options, Tab, editing, IME, Enter once, resumed native drafts, Escape and close after failures');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

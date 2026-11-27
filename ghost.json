@@ -5,13 +5,18 @@
   "name": "herdr for Cindy",
   "description": "Manage herdr coding agents and the workspaces that hold them, on this computer and on SSH machines saved in herdr. Includes a herdr page to follow agents, start new ones (optionally on a new git worktree) and answer them.",
   "whenToUse": "The user mentions herdr, herdr sessions/workspaces/tabs/panes, or wants to check, read, prompt, start, wait on or coordinate coding agents (Claude, Codex, Grok, Pi, etc.) running in herdr, locally or on a remote herdr machine (e.g. a dev box reachable over SSH).",
+  "readme": {
+    "en": "README.md",
+    "zh-CN": "README.zh-CN.md"
+  },
   "locales": {
     "en": "locales/en.json",
     "zh-CN": "locales/zh-CN.json",
     "ja": "locales/ja.json",
     "ko": "locales/ko.json"
   },
-  "version": "1.4.4",
+  "version": "1.4.9",
+  "releaseNotes": "Improved native slash command completion, editing and draft preservation. Added a prominent GitHub contribution link to the plugin page and introduction.",
   "entry": "main.js",
   "icon": "assets/icon.png",
   "command": "herdr-bridge",

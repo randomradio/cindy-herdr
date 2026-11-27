@@ -7,15 +7,14 @@ const border = (line) => /^[\s╭╮╰╯┌┐└┘├┤│┃─━┬┴�
 function parseScreen(raw, agent) {
   const source = String(raw || '').split(/\r?\n/).slice(-160);
   const lines = source.map((s) => clean(s).replace(/[│┃]\s*$/, '').replace(/^\s*[│┃] ?/, '').trimEnd());
-  // Pi paints its cursor using inverse video. The text before that cell is
-  // authoritative and retains a completion's trailing space (screen padding
-  // is otherwise indistinguishable from editor whitespace).
   const editorText = (row, fallback) => {
     if (!pi) return fallback;
     const caret = source[row]?.search(/\x1b\[(?:[0-9;]*;)?7m/);
     if (caret === undefined || caret < 0) return fallback;
     const before = clean(source[row].slice(0, caret));
-    return before.trimStart().startsWith('/') ? before.trimStart() : fallback;
+    const prefix = before.trimStart();
+    const full = clean(source[row]).trim();
+    return prefix.startsWith('/') ? (full.length >= prefix.length ? full : prefix) : fallback;
   };
   const pi = agent === 'pi' || agent === 'omp';
   let input = null, inputRow = -1;
@@ -35,7 +34,7 @@ function parseScreen(raw, agent) {
     for (let offset = 0; offset < lines.length; offset++) {
       const row = agent === 'codex' ? lines.length - 1 - offset : offset;
       const match = (agent === 'codex' ? /^› ?(.*)$/ : /^\s*[›❯>] ?(.*)$/).exec(lines[row]);
-      if (!match || /\S\s{2,}\S/.test(match[1])) continue;
+      if (!match || (agent !== 'codex' && /\S\s{2,}\S/.test(match[1]))) continue;
       const value = match[1].trimEnd();
       if (agent !== 'codex' && value && !value.startsWith('/')) continue;
       const hint = agent === 'codex' && /\x1b\[2m(?:\x1b\[(?:38|48);[0-9;]*m)*([^\x1b]+)/.exec(source[row]);
@@ -48,19 +47,23 @@ function parseScreen(raw, agent) {
   let selected = -1;
   const marker = /^\s*[→❯›>]\s+/;
   let markedRow = -1;
+  let optionStart = -1;
   // Pi options have bare command names and a selected arrow. They must occur
   // below a recognized editor; without that anchor don't parse transcript text.
   if (pi && inputRow >= 0) {
     markedRow = lines.findIndex((line, i) => i > inputRow && /^\s*→\s+\S/.test(line));
+    optionStart = markedRow;
+    while (optionStart > inputRow + 1 && /^\s{2,}\/?[\w:./@+-]+(?:\s{2,}.*)?$/.test(lines[optionStart - 1])) optionStart--;
   }
   for (let i = 0; i < lines.length && options.length < 32; i++) {
     if (inputRow < 0 || i === inputRow || i < inputRow) continue;
     const line = lines[i];
     let match;
     if (pi && markedRow >= 0) {
-      // Only rows at and below the arrow. Text above it is the editor or transcript, not a command.
-      if (i < markedRow || i > markedRow + 8 || border(line)) continue;
+      if (i < optionStart) continue;
+      if (i > markedRow + 8 || border(line)) break;
       match = /^\s*(?:→\s+)?(\/?[\w:./@+-]+)(?:\s{2,}(.*))?\s*$/.exec(line);
+      if (!match) break;
     } else {
       match = /^\s*(?:[→❯›>]\s+)?(\/[\w:.-]+)(?:\s{2,}(.*))?\s*$/.exec(line);
     }
@@ -89,9 +92,10 @@ const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 const chars = (s) => Array.from(segmenter.segment(s), x => x.segment);
 async function applyEdit(p, current, target, run) {
   if (current.input === null || current.input.trimEnd() !== p.expectedText.trimEnd()) throw new Error('The agent input changed. Wait for the menu to refresh or open Terminal.');
-  const old = chars(p.expectedText), next = chars(p.text);
+  const old = chars(current.input), next = chars(p.text);
   let common = 0;
   while (common < old.length && common < next.length && old[common] === next[common]) common++;
+  if (old.length && p.text !== current.input) await run(['pane', 'send-keys', target, 'end']);
   // Browser owns its caret. The native editor stays at the end of its line.
   for (let left = old.length - common; left > 0; left -= 32) await run(['pane', 'send-keys', target, ...Array(Math.min(left, 32)).fill('backspace')]);
   let suffix = next.slice(common).join('');
@@ -105,41 +109,50 @@ async function interact(p, agent, run) {
   let current = await screen();
   if (p.operation === 'read') return { ok: true, ...current };
   if (p.operation === 'open') {
-    if (current.input !== '' && current.input !== p.text) throw new Error('The native editor is not empty or cannot be identified. Open Terminal to review it.');
+    if ((p.text === '/' && /^\/[^\s\x00-\x1f\x7f]*$/.test(current.input || '')) || current.input === p.text) return { ok: true, ...current, resumed: true };
+    if (current.input !== '') return {
+      ok: false,
+      code: current.input === null ? 'EDITOR_UNAVAILABLE' : 'EDITOR_HAS_DRAFT',
+      message: current.input === null
+        ? 'The agent editor could not be identified. Open Terminal to continue.'
+        : 'The agent terminal contains a draft. Open Terminal to continue editing it.',
+    };
     if (!current.input) await run(['pane', 'send-text', target, p.text]);
   } else if (p.operation === 'edit') {
     await applyEdit(p, current, target, run);
   } else if (p.operation === 'select') {
+    if (typeof p.expectedText === 'string' && (current.input === null || current.input.trimEnd() !== p.expectedText.trimEnd())) throw new Error('The agent input changed. Wait for the menu to refresh or open Terminal.');
     const index = current.options.findIndex(o => o.label === p.label);
-    if (index < 0 || current.selected < 0) throw new Error('The menu selection changed. Use the arrow keys to select an option.');
+    if (index < 0 || current.selected < 0) return { ok: true, ...current, selectionChanged: true };
     const delta = index - current.selected;
     if (delta) await run(['pane', 'send-keys', target, ...Array(Math.abs(delta)).fill(delta > 0 ? 'down' : 'up')]);
     // Re-read before Tab. A repaint between the first read and the arrows
     // must not complete a different option.
-    current = await screen();
-    if (current.options[current.selected]?.label !== p.label) throw new Error('The menu selection changed. Use the arrow keys to select an option.');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (delta) await new Promise(resolve => setTimeout(resolve, 35));
+      current = await screen();
+      if (current.options[current.selected]?.label === p.label) break;
+    }
+    if (current.options[current.selected]?.label !== p.label) return { ok: true, ...current, selectionChanged: true };
     await run(['pane', 'send-keys', target, 'tab']);
   } else if (p.operation === 'key' && typeof p.draft === 'string' && p.draft !== current.input) {
     // Typing and Tab/Enter share one request so the key cannot land on a
     // prefix the browser has already replaced.
     await applyEdit({ text: p.draft, expectedText: p.expectedText }, current, target, run);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 35));
+      current = await screen();
+      if (current.input?.trimEnd() === p.draft.trimEnd()) break;
+    }
+    if (current.input?.trimEnd() !== p.draft.trimEnd()) return {
+      ok: false,
+      code: 'EDITOR_CHANGED',
+      message: 'The native editor did not accept the command draft. Open Terminal to continue.',
+    };
     await run(['pane', 'send-keys', target, p.key]);
   } else if (p.operation === 'cancel') {
     if (typeof p.expectedText !== 'string' || current.input === null || current.input.trimEnd() !== p.expectedText.trimEnd()) throw new Error('The agent input changed. Open Terminal to dismiss the dialog.');
     await run(['pane', 'send-keys', target, 'esc']);
-    // Remove only the acknowledged command owned by this interaction. Never
-    // use Ctrl+U/Ctrl+C or clear a different user's native editor draft.
-    // Stop on the first failed batch so a later error cannot claim success
-    // while part of the command is still in the native editor.
-    let left = chars(p.expectedText).length;
-    try {
-      while (left > 0) {
-        await run(['pane', 'send-keys', target, ...Array(Math.min(left, 32)).fill('backspace')]);
-        left -= 32;
-      }
-    } catch (err) {
-      throw new Error('Could not finish dismissing the command. Open Terminal to check the agent editor.');
-    }
   } else if (p.operation === 'key') {
     await run(['pane', 'send-keys', target, p.key]);
   } else {
@@ -147,11 +160,12 @@ async function interact(p, agent, run) {
   }
   // The write can precede the TUI repaint. A bounded settle window avoids an
   // extra SSH request on every Tab; never replays a mutation to refresh output.
-  const baseline = current.text;
+  const menuState = value => JSON.stringify([value.input, value.options, value.selected, value.recognized]);
+  const baseline = menuState(current);
   for (let i = 0; i < 3; i++) {
     await new Promise(resolve => setTimeout(resolve, 35));
     current = await screen();
-    if (current.text !== baseline) break;
+    if (menuState(current) !== baseline) break;
   }
   return { ok: true, ...current };
 }

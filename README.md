@@ -4,6 +4,9 @@ A [Cindy](https://github.com/makecindy/cindy) plugin that lets Cindy see and dri
 [herdr](https://herdr.dev) — the terminal / session / coding-agent multiplexer —
 on this computer and on SSH machines saved in herdr.
 
+**Contribute:** [Source code and issues on GitHub](https://github.com/randomradio/cindy-herdr).
+Bug reports and pull requests are welcome.
+
 ## What it does
 
 - **herdr page in Cindy's sidebar.** Pick a machine and session and see every
@@ -25,9 +28,23 @@ on this computer and on SSH machines saved in herdr.
   selected agent's own commands as browser options above the composer, without
   a static command catalog or loading the full Terminal. Typing filters them;
   arrows move the agent's selection, Tab completes the selected command back
-  into the composer, Enter runs it, and Esc dismisses only that interaction.
+  into the composer, Enter confirms in the native agent, and Esc follows the
+  agent's own dismissal behavior without extra draft deletion.
+  An unmatched prefix stays editable; deleting letters refreshes the native
+  suggestions. Tab and arrows do nothing when that menu is empty. An option
+  that disappears refreshes the list without reporting a command failure.
+  Delayed terminal redraws use read-only refreshes before another edit, so
+  consecutive backspaces do not replay input or discard the browser draft.
   Clicking an option completes it without running it. Open full terminal
   remains available when the agent shows a dialog Cindy cannot recognize.
+  An existing native command prefix is resumed without typing it again.
+  Typing continues while the menu opens or completes a command, including
+  Chinese input composition. Native dialogs continue in Terminal. Failed
+  requests pause command delivery, while the browser draft stays editable.
+  Returning to the page does not replay uncertain input. Temporary unreadable
+  screens use read-only refreshes; unsupported layouts keep the draft locally.
+  Trailing spaces stay local until the next argument makes them visible in
+  the native editor. Codex command arguments can contain repeated spaces.
 - **New agent.** Choose an agent type, a folder and an optional name, and
   optionally work on a new git branch (a worktree under
   `~/.worktrees/<repo>/<branch>`, with an optional base). The page creates the

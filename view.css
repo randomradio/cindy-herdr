@@ -31,6 +31,8 @@ button, input, select, textarea { font-family: inherit; }
 .sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px 14px 8px; }
 .brand { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; }
 .brand img { border-radius: 6px; }
+.repo-link { align-self: flex-start; margin: 0 14px 6px; color: var(--text-secondary, #666); font-size: 12px; text-decoration: none; }
+.repo-link:hover { text-decoration: underline; }
 .filters { display: flex; align-items: flex-end; gap: 6px; padding: 4px 12px 12px; }
 .field { display: flex; flex-direction: column; gap: 2px; flex: 1 1 0; min-width: 0; }
 .field-label { font-size: 11px; line-height: 16px; color: var(--text-tertiary, #8a8a85); }

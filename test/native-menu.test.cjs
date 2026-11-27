@@ -20,10 +20,12 @@ test('Codex dim placeholder is an empty editor, while ordinary text remains a dr
   assert.equal(opened.options.length, 3);
   assert.deepEqual(writes, [['pane', 'send-text', 'w1:p1', '/']]);
   for (const draft of ['Ask Codex to do anything', '/review my changes']) {
-    await assert.rejects(menu.interact({ operation: 'open', text: '/', target: 'w1:p1' }, 'codex', async (args, raw) => {
+    const refused = await menu.interact({ operation: 'open', text: '/', target: 'w1:p1' }, 'codex', async (args, raw) => {
       if (raw) return '› ' + draft;
       assert.fail('Existing drafts must not receive input.');
-    }), /not empty/);
+    });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.code, 'EDITOR_HAS_DRAFT');
   }
 });
 test('Codex uses the current editor below historical slash prompts', () => {
@@ -32,13 +34,49 @@ test('Codex uses the current editor below historical slash prompts', () => {
   assert.equal(menu.parseScreen(previous + '› /model', 'codex').input, '/model');
   assert.notEqual(menu.parseScreen(previous + '› keep this draft', 'codex').input, '/review');
 });
+test('opening commands resumes an existing native command prefix without typing or submitting', async () => {
+  for (const draft of ['/models', '/']) {
+    const result = await menu.interact({ operation: 'open', text: '/', target: 'w1:p1' }, 'codex', async (args, raw) => {
+      if (raw) return codexScreen(draft);
+      assert.fail('Resuming a native command must not write to the terminal.');
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.input, draft);
+    assert.equal(result.resumed, true);
+  }
+});
+test('opening a different browser command preserves both drafts', async () => {
+  const result = await menu.interact({ operation: 'open', text: '/review keep my instructions', target: 'w1:p1' }, 'codex', async (args, raw) => {
+    if (raw) return codexScreen('/models');
+    assert.fail('Conflicting drafts must not receive input.');
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'EDITOR_HAS_DRAFT');
+});
+test('editing a resumed command positions the native cursor before deleting', async () => {
+  let draft = '/models', cursor = 3;
+  const result = await menu.interact({ operation: 'edit', text: '/model', expectedText: draft, target: 'w1:p1' }, 'codex', async (args, raw) => {
+    if (raw) return codexScreen(draft);
+    assert.equal(args[1], 'send-keys');
+    for (const key of args.slice(3)) {
+      if (key === 'end') cursor = draft.length;
+      else if (key === 'backspace') {
+        draft = draft.slice(0, cursor - 1) + draft.slice(cursor);
+        cursor--;
+      } else assert.fail('Unexpected key: ' + key);
+    }
+  });
+  assert.equal(result.input, '/model');
+});
 test('Codex continuation and completion markers cannot replace its editor', async () => {
   const multiline = '› /review my changes\n  > ';
   assert.equal(menu.parseScreen(multiline, 'codex').input, '/review my changes');
-  await assert.rejects(menu.interact({ operation: 'open', text: '/', target: 'w1:p1' }, 'codex', async (args, raw) => {
+  const refused = await menu.interact({ operation: 'open', text: '/', target: 'w1:p1' }, 'codex', async (args, raw) => {
     if (raw) return multiline;
     assert.fail('A continuation row must not receive input.');
-  }), /not empty/);
+  });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.code, 'EDITOR_HAS_DRAFT');
   const completion = '› /m\n❯ /model\n  /review    Review changes';
   const parsed = menu.parseScreen(completion, 'codex');
   assert.equal(parsed.input, '/m');
@@ -78,18 +116,20 @@ test('a key carries an unsent draft so Tab cannot complete the stale prefix', as
     if (args[1] === 'send-text') text = piScreen('/mo');
     if (args.includes('tab')) text = piScreen('/model');
   });
-  assert.deepEqual(writes.map(a => a[1]), ['send-text', 'send-keys']);
-  assert.equal(writes[0][3], 'mo');
+  assert.deepEqual(writes.map(a => a[1]), ['send-keys', 'send-text', 'send-keys']);
+  assert.equal(writes[1][3], 'mo');
   assert.equal(r.input, '/model');
 });
 
 test('click selection re-reads the highlight and refuses Tab when it moved', async () => {
   let calls = 0;
-  await assert.rejects(menu.interact({ operation: 'select', label: 'settings', target: 'w1:p1' }, 'pi', async (args, raw) => {
+  const result = await menu.interact({ operation: 'select', label: 'settings', target: 'w1:p1' }, 'pi', async (args, raw) => {
     if (!raw) return;
     calls++;
     return calls === 1 ? piScreen('/') : piScreen('/', '→ model     Select model\n  settings  Edit settings');
-  }), /selection changed/);
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.selectionChanged, true);
 });
 
 test('Tab is a logical herdr key, returned input is authoritative', async () => {
@@ -121,10 +161,10 @@ test('middle replacement is suffix editing with grapheme backspaces, never clear
     writes.push(args);
     if (args[1] === 'send-text') text = piScreen('/say 他', '');
   });
-  assert.deepEqual(writes, [['pane', 'send-keys', 'w1:p1', 'backspace', 'backspace'], ['pane', 'send-text', 'w1:p1', '他']]);
+  assert.deepEqual(writes, [['pane', 'send-keys', 'w1:p1', 'end'], ['pane', 'send-keys', 'w1:p1', 'backspace', 'backspace'], ['pane', 'send-text', 'w1:p1', '他']]);
   assert.equal(r.input, '/say 他');
 });
-test('cancel sends esc then backspaces only the owned command and stops on failure', async () => {
+test('cancel sends only native Escape and reports a transport failure without extra input', async () => {
   const writes = [];
   let text = piScreen('/model');
   await menu.interact({ operation: 'cancel', expectedText: '/model', target: 'w1:p1' }, 'pi', async (args, raw) => {
@@ -132,21 +172,25 @@ test('cancel sends esc then backspaces only the owned command and stops on failu
     writes.push(args);
     if (args.includes('esc')) text = piScreen('/model', '');
   });
-  assert.deepEqual(writes[0], ['pane', 'send-keys', 'w1:p1', 'esc']);
-  assert.equal(writes[1].filter(k => k === 'backspace').length, 6);
+  assert.deepEqual(writes, [['pane', 'send-keys', 'w1:p1', 'esc']]);
   writes.length = 0;
   await assert.rejects(menu.interact({ operation: 'cancel', expectedText: '/model', target: 'w1:p1' }, 'pi', async (args, raw) => {
     if (raw) return piScreen('/model', '');
     writes.push(args);
-    if (args.includes('backspace')) throw new Error('transport');
-  }), /dismissing/);
-  assert.equal(writes.filter(a => a.includes('backspace')).length, 1);
+    if (args.includes('esc')) throw new Error('transport');
+  }), /transport/);
+  assert.deepEqual(writes, [['pane', 'send-keys', 'w1:p1', 'esc']]);
 });
 
 test('no writes when editor draft changed or menu is unrecognized', async () => {
   let writes = 0;
   const run = async (args, raw) => { if (raw) return piScreen('/someone-else'); writes++; };
-  await assert.rejects(menu.interact({ operation: 'open', text: '/', target: 'w1:p1' }, 'pi', run), /not empty/);
+  const refused = await menu.interact({ operation: 'open', text: '/', target: 'w1:p1' }, 'pi', async (args, raw) => {
+    if (raw) return 'Unrecognized editor';
+    writes++;
+  });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.code, 'EDITOR_UNAVAILABLE');
   await assert.rejects(menu.interact({ operation: 'edit', text: '/m', expectedText: '/', target: 'w1:p1' }, 'pi', run), /changed/);
   assert.equal(writes, 0);
   assert.throws(() => menu.validate({ operation: 'edit', text: '/x\n/quit', expectedText: '/' }), /single line/);
